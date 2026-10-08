@@ -140,6 +140,10 @@ If you see `grantors=pam_syauth`, you're done.
 
 ---
 
+For an existing Arch Linux KDE setup, the optional
+[package update checker](docs/arch-update-check.md) detects configuration and
+dependency drift after pacman transactions and keeps baseline acceptance explicit.
+
 ## Resulting auth chains
 
 | Service        | Chain                                                |

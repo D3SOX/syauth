@@ -440,3 +440,28 @@ help (for `install-pam`).
   service — the admin might be cleaning up. The minimal-surprise behavior
   is "exit 0, warn, do not touch the bak". This is the explicit DoD
   contract.
+
+## Optional Arch update checker integration
+
+Source: D3SOX commit `4e84a76abdee049c32f771a4f658d169862e1ac1`.
+An administrator with an already tested Arch/KDE setup can enable a pacman
+post-transaction check, inspect findings, test authentication, and explicitly
+record the accepted baseline. No PAM rule or authentication policy is installed
+by this checker. The existing install-helper behavior is unchanged.
+
+The standalone checker accepts `--baseline PATH` and `--record-baseline`.
+Exit codes distinguish unchanged state (0), findings requiring review (1), and
+an incomplete check (2). Baselines are replaced atomically only after package,
+module, and `.pacnew` checks pass. Routine checks and the hook never accept drift.
+
+Acceptance covers changed local and vendor files, missing modules, package
+updates/removal, `.pacnew`, malformed JSON/schema, untrusted module permissions,
+non-ELF input, loader failures, preserved baselines, and one hook invocation per
+transaction. A real CLI subprocess verifies that an absent private baseline
+returns actionable status 2 without creating files or requiring pacman.
+
+Implementation and traceability: `scripts/check-pam-update.py`,
+`deploy/arch/{95-syauth-check.hook,install-update-check.sh}`,
+`tests/test_pam_update_check.py`, `.github/workflows/ci.yml`, and
+`docs/arch-update-check.md`. Tests use private files and mocked system commands;
+the optional installer is never executed on the development host.
