@@ -15,22 +15,21 @@ Markdown table; the test harness appends one row per run when
   `offline_case`) record their elapsed time as both p50 and p95/p99 of
   a one-sample histogram. This keeps the row format uniform across all
   nine cases.
-- The recording is **opt-in** via `SYAUTH_E2E_REAL_WRITE_BASELINES=1`.
+- The recording is opt-in via `SYAUTH_E2E_REAL_WRITE_BASELINES=1`.
   Default behaviour (`make e2e-real` with the gate on) is to assert
-  the documented budget without writing — so two concurrent CI runs
+  the documented budget without writing, so two concurrent CI runs
   do not race on this file.
 - The run id comes from `E2E_RUN_ID` if set, else from a hex of the
   current unix timestamp.
 
 ## Flake budget
 
-**Flake budget is 0.** If a case flakes once on a CI host, file a bug
+Flake budget is 0. If a case flakes once on a CI host, file a bug
 via `/bug` with the run log; either fix the underlying race or
 quarantine the case via `#[ignore]` with a
 `// QUARANTINED: <bug-id>` comment before merge. Quarantines are a
-stop-the-line signal, not a maintenance pattern — every quarantine
-ages out within one release cycle or the bug it points at gets
-elevated to a roadmap item.
+release blockers. Remove each quarantine within one release cycle or
+add its underlying bug to the roadmap.
 
 ## Running e2e-real locally
 
@@ -72,9 +71,9 @@ Prerequisites:
 | `replay_case` | `AuthErr{reason:"replay"}` when a prior response is resent | n/a |
 | `bad_sig_case` | `AuthErr{reason:"bad-signature"}` when the phone's signature is corrupted | n/a |
 | `wrong_version_case` | `AuthErr{reason:"wrong-version"}` when the version byte differs | n/a |
-| `revoked_case` | `AuthInfoUnavail{reason:"no bonded peer"}` — radio is never touched | < 200 ms |
+| `revoked_case` | `AuthInfoUnavail{reason:"no bonded peer"}`, radio is never touched | < 200 ms |
 | `mtu_split_case` | `AuthOutcome::Success` when GATT MTU forces fragment reassembly | p95 < 2.0 s |
-| `panic_in_core_case` | `AuthErr{reason:"panicked-in-core"}` — `catch_unwind` boundary intact | n/a |
+| `panic_in_core_case` | `AuthErr{reason:"panicked-in-core"}`, `catch_unwind` boundary intact | n/a |
 
 ## golden_case
 

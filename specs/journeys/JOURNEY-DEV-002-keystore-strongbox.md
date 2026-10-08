@@ -1,21 +1,21 @@
 # JOURNEY-DEV-002: Ed25519 signing key into Android Keystore (STRONGBOX)
 
-> **SPEC anchors:** §3.2 D6 — verbatim:
+> SPEC anchors. §3.2 D6, verbatim:
 > "Android: hardware-backed Android Keystore with `STRONGBOX` when
 > available, `setUserAuthenticationRequired(true)` so the key can only
 > sign when the user has authenticated".
 >
-> **Gap reference:** `docs/known-gaps.md` row DEV-002 (Open deviations).
+> Gap reference. `docs/known-gaps.md` row DEV-002 (Open deviations).
 >
-> **Predecessor:** JOURNEY-DEV-001 closed in this same march and moved
+> Predecessor. JOURNEY-DEV-001 closed in this same march and moved
 > bond persistence under `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/`.
 > The DEV-002 row's "Source locations" section still points at the
 > deleted `provision/` package; the new locations are under `bond/`.
 
-## Roadmap Link
+## Roadmap link
 
 - Source roadmap: [`specs/syauth/ROADMAP.md`](../syauth/ROADMAP.md) items
-  **S-016** (Android pairing screen) and **S-017** (Android approve screen).
+  S-016 (Android pairing screen) and S-017 (Android approve screen).
   Both were closed with stub key-material handling; this journey
   installs the Keystore-backed production path.
 - Feature: replace the on-disk Ed25519 seed with a Keystore-resident
@@ -23,13 +23,13 @@
 
 ## 1. Journey
 
-When **a syauth operator pairs a new phone and then unlocks their
-desktop with it**, I want to **trust that the Ed25519 secret bonded to
+When a syauth operator pairs a new phone and then unlocks their
+desktop with it, I want to trust that the Ed25519 secret bonded to
 that phone has never existed as plaintext bytes in either app private
-storage or the JVM heap — only inside the Android Keystore's hardware
-enclave, gated by a fresh biometric per unlock**, so I can **defend
+storage or the JVM heap, only inside the Android Keystore's hardware
+enclave, gated by a fresh biometric per unlock, so I can defend
 against an attacker who roots the phone or extracts `<filesDir>` (the
-exact threat T-007 "root key extraction" the `/threat` skill names)**.
+exact threat T-007 "root key extraction" the `/threat` skill names).
 
 ## 2. CJM
 
@@ -38,24 +38,24 @@ keypair, ships the 32-byte secret seed across the LESC link, and writes
 it as plaintext under `<filesDir>/syauth-bond.toml`. On every unlock,
 `MainActivity::ApproveRoute` reads the seed into
 `InMemorySigningKeyProvider` and hands it to UniFFI's
-`buildResponseFrame` — the seed crosses the JVM/native boundary on
+`buildResponseFrame`, the seed crosses the JVM/native boundary on
 every unlock. A root-level adversary can dump the file and replay
 unlocks forever. SPEC §3.2 D6 demands the opposite: the private bytes
 never leave the Keystore enclave, and every sign requires a fresh
-biometric. This journey closes that gap end to end — pair time
+biometric. This journey closes that gap end to end, pair time
 generates the key inside Keystore (STRONGBOX-preferred), the bond
 record on disk carries only the alias + pubkey + bond_key, and unlock
 sign happens via a UniFFI callback that calls into a Kotlin
 `KeystoreFrameSigner` which delegates to `Signature.getInstance("Ed25519")`
 initialised against the Keystore-backed `PrivateKey`.
 
-### Phase 1: Pair-time keypair generation in Keystore (STRONGBOX preferred)
+### Phase 1: pair-time keypair generation in Keystore (STRONGBOX preferred)
 
-**User Intent:** complete the LESC + app-OOB pair so a long-term phone
+User intent. Complete the LESC + app-OOB pair so a long-term phone
 identity Ed25519 keypair exists, with the private key locked inside
 the Keystore enclave.
 
-**Actions:**
+Actions.
 - After OS-level LESC numeric-comparison succeeds and the app-level
   4-word OOB confirmation completes, `RealPairBackend` calls
   `KeystoreKeyGenerator.generate(alias)` which:
@@ -63,7 +63,7 @@ the Keystore enclave.
   - calls `.setAlgorithmParameterSpec(NamedParameterSpec("Ed25519"))`
     (API 33+ contract per `KeyProperties.KEY_ALGORITHM_EC` with the
     Ed25519 named curve)
-  - calls `.setDigests(KeyProperties.DIGEST_NONE)` — Ed25519 hashes
+  - calls `.setDigests(KeyProperties.DIGEST_NONE)`, Ed25519 hashes
     the message internally
   - calls `.setUserAuthenticationRequired(true)` so the private key
     cannot sign without a fresh BiometricPrompt unlock
@@ -77,11 +77,11 @@ the Keystore enclave.
   (along with the alias + the bond_key + the peer's pubkey + the
   host name + peer id) into the bond record on disk.
 
-**Pain / Risk:**
+Pain / risk.
 - The device is API < 33: Ed25519 NamedParameterSpec is unavailable.
   Mitigation: production target is API 33+; the path returns a typed
   `KeystoreKeygenError.UnsupportedApi` and the pair flow aborts with
-  a "phone too old for syauth" surface message.
+  a "phone too old for syauth" message.
 - The device lacks a StrongBox secure element. Mitigation: the
   `StrongBoxUnavailableException` is caught and the build retried
   without STRONGBOX; the bond record records the strongBoxBacked
@@ -92,29 +92,28 @@ the Keystore enclave.
   re-pair without revoke surfaces a typed `AliasAlreadyExists` that
   the existing pair-side `--force` flag already handles.
 
-**Success Signal:** the bond record's `keystoreAlias` field is
+Success signal. The bond record's `keystoreAlias` field is
 non-empty, the `phonePubkey` decodes to a valid Ed25519 pubkey, and
 the Keystore alias resolves to a `PrivateKey` whose certificate
 chain's public key matches `phonePubkey` byte-for-byte. The seed
 bytes never appear anywhere on disk or in any `ByteArray`.
 
-### Phase 2: Unlock-time sign happens under Keystore (user-auth gate)
+### Phase 2: unlock-time sign happens under Keystore (user-auth gate)
 
-**User Intent:** when the desktop sends a challenge, the phone produces
+User intent. When the desktop sends a challenge, the phone produces
 the Ed25519 signature over the challenge frame using the Keystore
-key — gated by a fresh biometric — without the private bytes ever
+key, gated by a fresh biometric, without the private bytes ever
 crossing the JVM boundary or the UniFFI boundary.
 
-**Actions:**
-- `MainActivity::ApproveRoute` instantiates `KeystoreFrameSigner(bondRecord.keystoreAlias)`
-  — implements the new `FrameSigner` UniFFI callback interface.
+Actions.
+- `MainActivity::ApproveRoute` instantiates `KeystoreFrameSigner(bondRecord.keystoreAlias)`,
+implements the new `FrameSigner` UniFFI callback interface.
 - The view-model calls `wireSigner.signWire(bondKey, frameBytes)`;
   the production `UniffiWireSigner` invokes the updated UniFFI
   `buildResponseFrame(bondKey, signer, challengeFrameBytes)` where
   `signer` is the `KeystoreFrameSigner` instance.
 - Inside the Rust core: `Frame::decode(challenge_bytes)` -> form
-  the unsigned body bytes -> upcall `signer.sign(unsigned_body)` —
-  the UniFFI callback machinery marshals the byte slice into a
+  the unsigned body bytes -> upcall `signer.sign(unsigned_body)`,   the UniFFI callback machinery marshals the byte slice into a
   Kotlin `ByteArray` and invokes the Kotlin method synchronously.
 - Inside Kotlin: `KeystoreFrameSigner.sign(message)` opens the
   Keystore, retrieves the `PrivateKey` under the alias, builds a
@@ -126,7 +125,7 @@ crossing the JVM boundary or the UniFFI boundary.
   computes the MAC tag under bond_key, encodes the full response
   frame, and returns the bytes to Kotlin's `UniffiWireSigner`.
 
-**Pain / Risk:**
+Pain / risk.
 - The user cancels the BiometricPrompt while the callback is
   in flight: `signature.sign()` throws
   `UserNotAuthenticatedException`. Mitigation: the Kotlin signer
@@ -135,27 +134,27 @@ crossing the JVM boundary or the UniFFI boundary.
   `Denied`. No bytes go on the wire.
 - An attacker calls `buildResponseFrame` without a real
   `FrameSigner` (e.g. they reflect into the bindings). Mitigation:
-  the UDL surface makes `signer` non-nullable; the only way to
+  the UDL interface makes `signer` non-nullable; the only way to
   invoke the function is to supply a callback object, which on
   the JVM side is only ever the production `KeystoreFrameSigner`
   (or a test double in unit tests).
 - Multi-threaded re-entrancy on the Keystore. Mitigation: the
-  `KeystoreFrameSigner` opens a fresh `Signature` per `sign` call
-  — no shared mutable state across threads.
+  `KeystoreFrameSigner` opens a fresh `Signature` per `sign` call,
+no shared mutable state across threads.
 
-**Success Signal:** the desktop's `pam_syauth` verifies the response
+Success signal. The desktop's `pam_syauth` verifies the response
 signature against the bonded phone's pubkey and the unlock
 succeeds. `git grep` for the Ed25519 seed across production source
 returns nothing. The Keystore audit log (`adb logcat | grep
 KeyStore`) shows a `Signature.sign` call gated by user-auth.
 
-### Phase 3: Bond record on disk carries alias + pubkey, never the seed
+### Phase 3: bond record on disk carries alias + pubkey, never the seed
 
-**User Intent:** rotating the desktop, re-installing the app, or
+User intent. Rotating the desktop, re-installing the app, or
 inspecting the bond record reveals no path to the long-term private
 key bytes.
 
-**Actions:**
+Actions.
 - `BondRecord` (the production data class) replaces the
   `phoneSigningKeySeed: ByteArray` field with
   `keystoreAlias: String`.
@@ -174,48 +173,46 @@ key bytes.
   equivalent shape only if any unit test still wants a fake
   signer.
 
-**Pain / Risk:**
+Pain / risk.
 - A user upgrading from a DEV-001-shipping build has an old TOML
   on disk with `phone_signing_key_hex`. Parse fails. Mitigation:
   the parser surfaces `UnsupportedSchemaVersion(got=1)` and the
-  app prompts the user to re-pair — the seed file gets renamed
+  app prompts the user to re-pair, the seed file gets renamed
   to `.legacy` so a sophisticated user can still extract it,
   but the app does not consume it.
 - The bond_key remains plaintext on disk (it's the symmetric MAC
   key for the unlock channel, not the long-term identity key).
-  This is residual surface area; DEV-002's closure scope does
+  This is remaining exposure; DEV-002's closure scope does
   not include moving the bond_key into Keystore, but the
   Closure section below records this as a future strengthening
   candidate.
 
-**Success Signal:** `git grep "phoneSigningKeySeed\|PHONE_SIGNING_KEY_HEX"`
+Success signal. `git grep "phoneSigningKeySeed\|PHONE_SIGNING_KEY_HEX"`
 returns nothing under `syauth-android/app/src/main/`. The on-disk
 TOML carries a `keystore_alias` line, no `phone_signing_key_hex`
 line. A radio-free Rust unit test confirms the UniFFI
 `buildResponseFrame` refuses to run without a `FrameSigner`.
 
-### Friction and Opportunity
+### Friction and opportunity
 
 | Friction | Phase | Opportunity |
 |---|---|---|
 | Older Android devices (API < 33) cannot host the Ed25519 Keystore key at all | Phase 1 | The pair flow surfaces a typed `UnsupportedApi` reason; `docs/android-setup.md` documents the API 33+ requirement up front so the operator does not run pair on a phone that will fail at the last step |
-| The `StrongBoxUnavailableException` fallback to non-STRONGBOX is invisible to the operator | Phase 1 | The bond record persists the `strongBoxBacked` boolean so `adb shell run-as` (and a future "phone status" surface) can show whether the key sits inside the secure element or the TEE |
-| Old bond records become unreadable after the schema bump | Phase 3 | The parser emits a typed `UnsupportedSchemaVersion(got=1)` and the home screen surfaces "re-pair required" — no silent data loss |
+| The `StrongBoxUnavailableException` fallback to non-STRONGBOX is invisible to the operator | Phase 1 | The bond record persists the `strongBoxBacked` boolean so `adb shell run-as` (and a future "phone status" screen) can show whether the key sits inside the secure element or the TEE |
+| Old bond records become unreadable after the schema bump | Phase 3 | The parser emits a typed `UnsupportedSchemaVersion(got=1)` and the home screen surfaces "re-pair required", no silent data loss |
 
-### North Star Summary
+### Expected outcome
 
-A rooted attacker who pulls `<filesDir>/syauth-bond.toml` off the
-phone sees only a Keystore alias and the bond_key MAC secret. The
-Ed25519 private key that signs unlock responses never appears
-outside the Keystore enclave; on STRONGBOX-capable phones the key
-sits inside a discrete secure element with its own clock and its
-own attestation. Every unlock requires a fresh biometric the user
-performed in the last few seconds. The phone-as-key story finally
-matches SPEC §3.2 D6 verbatim.
+A rooted attacker who reads `<filesDir>/syauth-bond.toml` finds a
+Keystore alias and the bond_key MAC secret, but no Ed25519 private key.
+The signing key remains inside the Keystore. On STRONGBOX-capable phones,
+the key is in a discrete secure element with its own clock and attestation.
+Every unlock requires a fresh biometric. This implements SPEC §3.2 D6.
 
-## 3. Architecture Notes
 
-### UniFFI surface change (`mobile.udl` + `implementation.rs`)
+## 3. Architecture notes
+
+### UniFFI API change (`mobile.udl` + `implementation.rs`)
 
 - Add a `callback interface FrameSigner` to `mobile.udl`:
   ```
@@ -233,7 +230,7 @@ matches SPEC §3.2 D6 verbatim.
   64-byte Ed25519 signature.
 - The bond record no longer carries the seed; the Rust side no
   longer needs `sign_challenge_response` for the production path,
-  but the function stays in the surface (it is used by the
+  but the function stays in the API (it is used by the
   Rust-side unit tests and by the pair-time bond derivation).
 
 ### Android side (`KeystoreFrameSigner` + `KeystoreKeyGenerator`)
@@ -309,38 +306,38 @@ matches SPEC §3.2 D6 verbatim.
 
 ## 4. Tests
 
-### TC-01: pair-time keystore key generation — STRONGBOX-preferred
+### TC-01: pair-time keystore key generation, strongbox-preferred
 
-**Given** a phone running API 33+ where the StrongBox HAL is present.
-**When** the pair flow calls `KeystoreKeyGenerator.generate(alias)`.
-**Then** a Keystore Ed25519 keypair exists under `alias`,
+Given a phone running API 33+ where the StrongBox HAL is present.
+When the pair flow calls `KeystoreKeyGenerator.generate(alias)`.
+Then a Keystore Ed25519 keypair exists under `alias`,
 `strongBoxBacked = true` is reported, the public key decodes to 32
 bytes, and `keyStore.getKey(alias, null)` returns a `PrivateKey` whose
 encoded form is `null` (Keystore-resident; opaque to the JVM).
 
 ### TC-02: pair-time fallback when StrongBox is absent
 
-**Given** a phone running API 33+ where StrongBox is not available
+Given a phone running API 33+ where StrongBox is not available
 (test fake throws `StrongBoxUnavailableException`).
-**When** the pair flow calls `KeystoreKeyGenerator.generate(alias)`.
-**Then** the generator catches the exception, retries without
+When the pair flow calls `KeystoreKeyGenerator.generate(alias)`.
+Then the generator catches the exception, retries without
 `setIsStrongBoxBacked(true)`, and returns `strongBoxBacked = false`.
 
 ### TC-03: hard refusal on API < 33
 
-**Given** the runtime SDK is API 32 or lower.
-**When** the pair flow calls `KeystoreKeyGenerator.generate(alias)`.
-**Then** the generator returns a typed
+Given the runtime SDK is API 32 or lower.
+When the pair flow calls `KeystoreKeyGenerator.generate(alias)`.
+Then the generator returns a typed
 `KeystoreKeygenError.UnsupportedApi` and the pair flow aborts with a
-human-readable "phone too old for syauth" surface; no keypair is
+human-readable "phone too old for syauth" message; no keypair is
 created.
 
 ### TC-04: unlock-time sign goes through the FrameSigner callback
 
-**Given** a bonded phone and a fresh challenge frame.
-**When** `UniffiWireSigner.signWire(bondKey, frameBytes)` runs with a
+Given a bonded phone and a fresh challenge frame.
+When `UniffiWireSigner.signWire(bondKey, frameBytes)` runs with a
 `KeystoreFrameSigner` wired into UniFFI's `buildResponseFrame`.
-**Then** UniFFI calls back into Kotlin's `KeystoreFrameSigner.sign(...)`
+Then UniFFI calls back into Kotlin's `KeystoreFrameSigner.sign(...)`
 exactly once with the unsigned body bytes; the returned 64-byte
 signature is the prefix of the response frame's payload; the response
 frame's MAC tag verifies under `bondKey`; the seed never appears as a
@@ -348,52 +345,51 @@ ByteArray in the call stack.
 
 ### TC-05: Rust UniFFI `build_response_frame` refuses bad signer output
 
-**Given** a mock `FrameSigner` that returns a 63-byte signature (one
+Given a mock `FrameSigner` that returns a 63-byte signature (one
 byte short).
-**When** `build_response_frame(bond_key, signer, challenge_bytes)` runs.
-**Then** it returns `MobileError::SignFailed` with a reason mentioning
+When `build_response_frame(bond_key, signer, challenge_bytes)` runs.
+Then it returns `MobileError::SignFailed` with a reason mentioning
 the expected length (64); no panic; the error message contains no
 bytes of the bond_key or the challenge.
 
-### TC-06: BondRecord schema migration — old record rejected
+### TC-06: BondRecord schema migration, old record rejected
 
-**Given** an on-disk bond record from DEV-001 (schema version 1, with
+Given an on-disk bond record from DEV-001 (schema version 1, with
 `phone_signing_key_hex = "..."`).
-**When** `BondStore(filesDir).load()` runs after the DEV-002 schema bump.
-**Then** the parser raises `BondParseError.UnsupportedSchemaVersion(got = 1)`;
+When `BondStore(filesDir).load()` runs after the DEV-002 schema bump.
+Then the parser raises `BondParseError.UnsupportedSchemaVersion(got = 1)`;
 the file is left untouched on disk; the home route surfaces a
 "re-pair required" toast.
 
-### TC-07: BondRecord schema migration — new record round-trips
+### TC-07: BondRecord schema migration, new record round-trips
 
-**Given** a freshly-paired bond record carrying `keystoreAlias =
+Given a freshly-paired bond record carrying `keystoreAlias =
 "syauth.ed25519.peer-xyz"`, the bond_key, the host name, the peer id,
 and the phone pubkey.
-**When** `BondStore.save(record)` writes the record and a subsequent
+When `BondStore.save(record)` writes the record and a subsequent
 `BondStore.load()` reads it back.
-**Then** the loaded `BondRecord` is byte-identical to the saved one;
+Then the loaded `BondRecord` is byte-identical to the saved one;
 the on-disk TOML contains `keystore_alias = "syauth.ed25519.peer-xyz"`;
 no `phone_signing_key_hex` line is present.
 
 ### TC-08: `InMemorySigningKeyProvider` has no production callers
 
-**Given** the post-DEV-002 source tree.
-**When** `git grep -l "InMemorySigningKeyProvider" -- syauth-android/app/src/main/`
+Given the post-DEV-002 source tree.
+When `git grep -l "InMemorySigningKeyProvider" -- syauth-android/app/src/main/`
 runs.
-**Then** the output is empty. The class either lives only under the
+Then the output is empty. The class either lives only under the
 test source root or has been removed outright.
 
-### TC-09: Robolectric — `KeystoreFrameSigner` opens the alias under
+### TC-09: Robolectric, `KeystoreFrameSigner` opens the alias under
 `AndroidKeyStore`
 
-**Given** a Robolectric-shadowed `AndroidKeyStore` provider on the
+Given a Robolectric-shadowed `AndroidKeyStore` provider on the
 JVM test runtime.
-**When** `KeystoreFrameSigner(alias).sign(message)` runs against a
+When `KeystoreFrameSigner(alias).sign(message)` runs against a
 test alias pre-loaded into the shadow.
-**Then** the shadow records a `KeyStore.getInstance("AndroidKeyStore")`
+Then the shadow records a `KeyStore.getInstance("AndroidKeyStore")`
 call, a `getKey(alias, null)` call, a `Signature.getInstance("Ed25519")`
-call (Robolectric cannot verify the underlying hardware enclave —
-this is documented in the test).
+call (Robolectric cannot verify the underlying hardware enclave, this is documented in the test).
 
 ## Traceability
 
@@ -402,11 +398,11 @@ this is documented in the test).
   in `docs/known-gaps.md`).
 - Gap row: `docs/known-gaps.md` DEV-002.
 - Implementation files (filled by `/implement`):
-  - `crates/syauth-mobile/src/mobile.udl` — `FrameSigner` callback
+  - `crates/syauth-mobile/src/mobile.udl`, `FrameSigner` callback
     interface + updated `build_response_frame` signature.
-  - `crates/syauth-mobile/src/implementation.rs` — Rust receiver
+  - `crates/syauth-mobile/src/implementation.rs`, Rust receiver
     for the callback interface + updated `build_response_frame`.
-  - `crates/syauth-mobile/Cargo.toml` — UniFFI feature flags if
+  - `crates/syauth-mobile/Cargo.toml`, UniFFI feature flags if
     needed for callback-interface support on 0.29.
   - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/KeystoreFrameSigner.kt`
     (new).
@@ -439,86 +435,86 @@ this is documented in the test).
 
 Files created:
 
-- `crates/syauth-mobile/src/mobile.udl` — added the `FrameSigner`
+- `crates/syauth-mobile/src/mobile.udl`, added the `FrameSigner`
   callback interface and updated `build_response_frame`'s third
   parameter from `bytes signing_key` to `FrameSigner signer`.
-- `crates/syauth-mobile/src/implementation.rs` — added `pub trait
+- `crates/syauth-mobile/src/implementation.rs`, added `pub trait
   FrameSigner: Send + Sync` and updated the Rust receiver to take
   `signer: Box<dyn FrameSigner>` + call `signer.sign(unsigned_body)`;
   added six new `build_response_frame_*` unit tests covering the
   FrameSigner callback contract.
-- `crates/syauth-mobile/src/lib.rs` — re-exported `FrameSigner` and
+- `crates/syauth-mobile/src/lib.rs`, re-exported `FrameSigner` and
   updated the `public_surface_reexports_compile` test.
-- `crates/syauth-mobile/bindings/kotlin/uniffi/syauth_mobile/syauth_mobile.kt`
-  — regenerated via `uniffi-bindgen generate ... --language kotlin`
-  to surface the new `FrameSigner` callback interface and the new
+- `crates/syauth-mobile/bindings/kotlin/uniffi/syauth_mobile/syauth_mobile.kt`,
+regenerated via `uniffi-bindgen generate ... --language kotlin`
+  to expose the new `FrameSigner` callback interface and the new
   `buildResponseFrame(bondKey, signer, challengeFrameBytes)` shape.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/KeystoreFrameSigner.kt`
-  (new) — production [`FrameSigner`] backed by
+  (new), production [`FrameSigner`] backed by
   `Signature.getInstance("Ed25519")` initialised against an Android
   Keystore-resident `PrivateKey`.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/KeystoreKeyGenerator.kt`
-  (new) — pair-time Ed25519 keypair generation via
+  (new), pair-time Ed25519 keypair generation via
   `KeyGenParameterSpec.Builder(alias, PURPOSE_SIGN)` +
   `NamedParameterSpec("Ed25519")` +
   `setUserAuthenticationRequired(true)` +
   `setIsStrongBoxBacked(true)` (STRONGBOX-preferred with
   fallback).
 - `syauth-android/app/src/test/kotlin/com/sy/syauth/android/approve/KeystoreFrameSignerTest.kt`
-  (new) — Robolectric `@Config(sdk = [33])` test pinning the
+  (new), Robolectric `@Config(sdk = [33])` test pinning the
   no-throw + empty-byte contract on missing alias.
 - `syauth-android/app/src/test/kotlin/com/sy/syauth/android/bond/BondRecordSchemaTest.kt`
-  (new) — TC-06 (legacy schema rejected) + TC-07 (new schema
+  (new), TC-06 (legacy schema rejected) + TC-07 (new schema
   round-trips with `keystore_alias`) + a constant pin asserting
   `BOND_RECORD_SCHEMA_VERSION == 2`.
 
 Files modified:
 
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/BondRecord.kt`
-  — replaced `phoneSigningKeySeed: ByteArray` with
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/BondRecord.kt`,
+replaced `phoneSigningKeySeed: ByteArray` with
   `keystoreAlias: String`.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/BondStore.kt`
-  — bumped `BOND_RECORD_SCHEMA_VERSION` from 1 to 2; swapped
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/BondStore.kt`,
+bumped `BOND_RECORD_SCHEMA_VERSION` from 1 to 2; swapped
   `BondKeys.PHONE_SIGNING_KEY_HEX` for `BondKeys.KEYSTORE_ALIAS`;
   updated `parseBondRecord` + `serializeBondRecord`.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/DiskBondPersister.kt`
-  — replaced `PLACEHOLDER_SEED: ByteArray` with `PLACEHOLDER_ALIAS:
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/DiskBondPersister.kt`,
+replaced `PLACEHOLDER_SEED: ByteArray` with `PLACEHOLDER_ALIAS:
   String = ""` + `PLACEHOLDER_PUBKEY: ByteArray`.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/UniffiWireSigner.kt`
-  — constructor now takes a `FrameSigner` and threads it through
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/UniffiWireSigner.kt`,
+constructor now takes a `FrameSigner` and threads it through
   `buildResponseFrame`'s new third argument.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/ApproveViewModel.kt`
-  — dropped the `signingKeyProvider` constructor parameter and the
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/ApproveViewModel.kt`,
+dropped the `signingKeyProvider` constructor parameter and the
   seed-fetch hop in `runApproveFlow`; the `WireSigner` interface's
   `signWire` lost its `seed: ByteArray` parameter.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/MainActivity.kt`
-  — replaced `InMemorySigningKeyProvider(seed)` with
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/MainActivity.kt`,
+replaced `InMemorySigningKeyProvider(seed)` with
   `KeystoreFrameSigner(alias = bondRecord.keystoreAlias)`; wired
   `AndroidKeystoreKeyGenerator` into `RealPairBackend` from the
   factory holder on API 33+.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt`
-  — added the optional `keystoreKeyGenerator: KeystoreKeyGenerator?`
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt`,
+added the optional `keystoreKeyGenerator: KeystoreKeyGenerator?`
   constructor parameter + the `mintKeystoreEd25519(alias)` helper
   the production wiring calls at pair time.
-- `syauth-android/app/src/androidTest/kotlin/com/sy/syauth/android/approve/ApproveScreenTest.kt`
-  — dropped the `signingKeyProvider` injection; updated the
+- `syauth-android/app/src/androidTest/kotlin/com/sy/syauth/android/approve/ApproveScreenTest.kt`,
+dropped the `signingKeyProvider` injection; updated the
   `NoOpWireSigner` signature to match the trimmed `WireSigner`
   contract.
-- `syauth-android/app/src/test/kotlin/com/sy/syauth/android/approve/ApproveViewModelTest.kt`
-  — removed the obsolete `missing_seed_emits_sign_error` test;
+- `syauth-android/app/src/test/kotlin/com/sy/syauth/android/approve/ApproveViewModelTest.kt`,
+removed the obsolete `missing_seed_emits_sign_error` test;
   `FakeWireSigner` now takes a single-argument behaviour function;
   `buildViewModel` dropped the `signingKeyProvider` parameter.
-- `syauth-android/app/src/test/kotlin/com/sy/syauth/android/pair/RealPairBackendTest.kt`
-  — updated the `BondRecord` fixture calls to use `keystoreAlias`
+- `syauth-android/app/src/test/kotlin/com/sy/syauth/android/pair/RealPairBackendTest.kt`,
+updated the `BondRecord` fixture calls to use `keystoreAlias`
   in place of the old `phoneSigningKeySeed`.
-- `docs/known-gaps.md` — moved DEV-002 row from Open to Closed
+- `docs/known-gaps.md`, moved DEV-002 row from Open to Closed
   with the closure timestamp, evidence block, and source-location
   relocation note.
 
 Files deleted:
 
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/SigningKeyProvider.kt`
-  — contained `SigningKeyResult`, the `SigningKeyProvider` interface,
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/SigningKeyProvider.kt`,
+contained `SigningKeyResult`, the `SigningKeyProvider` interface,
   and `InMemorySigningKeyProvider`. All three are retired; the
   Keystore-backed sign path replaces them.
 
@@ -527,18 +523,18 @@ Files deleted:
 Decisions taken during implementation (deviations from the journey
 plan, captured in writing per AGENTS.md):
 
-- **`InMemorySigningKeyProvider` was DELETED outright**, not moved
+- `InMemorySigningKeyProvider` was DELETED outright, not moved
   under `app/src/test/`. The unit tests it served (the
   `missing_seed_emits_sign_error` case in `ApproveViewModelTest`)
   have been retired because the seed-fetch hop is no longer part
   of the approve flow; the `wire_signer_failure_emits_sign_error`
-  test already covers the SignError surface.
-- **The `WireSigner` interface lost its `seed: ByteArray` parameter**
+  test already covers the SignError case.
+- The `WireSigner` interface lost its `seed: ByteArray` parameter
   rather than keeping it as a documentation-only artifact. The
   Kotlin-side simplification means callers (`ApproveViewModel`,
   `UniffiWireSigner`, the two test fakes, the androidTest no-op)
   no longer have any place for raw key bytes.
-- **The Android Gradle environmental blocker** documented in DEV-001
+- The Android Gradle environmental blocker documented in DEV-001
   + DEV-003 + DEV-004 (Java 25 vs Gradle 8.7 from the bundled
   Kotlin compiler) STILL prevents `./gradlew :app:testDebugUnitTest`
   from running on this host. The new
@@ -546,33 +542,32 @@ plan, captured in writing per AGENTS.md):
   under the same Kotlin source rules but were not executed under
   Gradle on this host; they will be exercised by the orchestrator's
   final pass on a JDK-compatible environment.
-- **The Robolectric `KeystoreFrameSignerTest`** documents that
+- The Robolectric `KeystoreFrameSignerTest` documents that
   Robolectric's `AndroidKeyStore` shadow does NOT carry a working
   Ed25519 implementation. The test asserts the no-throw +
-  empty-byte contract on a missing alias — which the Rust side
-  surfaces as `MobileError::SignFailed` — but cannot prove the
-  happy path. The happy path is verified by a real-device
+  empty-byte contract on a missing alias, which the Rust side
+  surfaces as `MobileError::SignFailed`, but cannot prove the
+  success path. The success path is verified by a real-device
   instrumented test, called out in the journey doc as the
   follow-up activity for STRONGBOX confirmation.
-- **The bond_key remains plaintext on disk**. It is the symmetric
+- The bond_key remains plaintext on disk. It is the symmetric
   MAC key for the unlock channel, not the long-term identity
   key; the DEV-002 closure scope does not include moving it into
   Keystore. The known-gaps.md row's "Evidence" section calls
   this out as a future strengthening candidate.
-- **API 33+ floor**: the production Ed25519 Keystore path uses
+- API 33+ floor. The production Ed25519 Keystore path uses
   `NamedParameterSpec("Ed25519")`, which is available from API 33
-  (Tiramisu) onwards. The app's `minSdk = 26` was not changed —
-  the `KeystoreKeyGenerator` returns a typed
+  (Tiramisu) onwards. The app's `minSdk = 26` was not changed,   the `KeystoreKeyGenerator` returns a typed
   `KeystoreKeygenError.UnsupportedApi` on older runtimes and the
   pair flow surfaces it. Production fleet target is API 33+; this
   is documented in the journey doc's Phase 1 risk row.
 
-## Closure Appendix — 2026-05-17 e2e verification
+## Closure appendix, 2026-05-17 e2e verification
 
-> **Context.** The first march pass closed DEV-002 on mechanical
+> Context. The first march pass closed DEV-002 on mechanical
 > evidence (Keystore wiring shipped, `InMemorySigningKeyProvider`
 > deleted, schema bumped). DEV-001 was then reopened because the LESC
-> pair flow had never actually run against a real device; that ran
+> pair flow had never run against a real device; that ran
 > tonight's R5CY214FQHM e2e session, which surfaced three runtime
 > defects in the DEV-002 keystore path that had been masked while the
 > code was unreachable. This appendix walks every bullet of the
@@ -606,7 +601,7 @@ pair flow. They are listed for the audit trail:
    the `idempotent_re_pair_returns_existing_certificate_pubkey` test
    pin the behaviour.
 
-### Production-grade key-mint behavior (Deliverable 1)
+### Production-grade key-mint behavior (deliverable 1)
 
 The diagnostic `try { ... } catch (e: Throwable) { return null }` in
 `RealPairBackend.kt::mintKeystoreEd25519` (which silently swallowed
@@ -619,7 +614,7 @@ return from `mintKeystoreEd25519` (test or pre-Tiramisu device, no
 generator wired) is now ALSO surfaced as a typed
 `LescResult.Failed(KEYSTORE_UNAVAILABLE_REASON)` rather than the
 silent zero-pubkey path the previous code took. SPEC §3.2 D6 forbids
-shipping unsigned material — the new path enforces it.
+shipping unsigned material, the new path enforces it.
 
 Evidence (all radio-free, runs in Robolectric on this host):
 
@@ -637,7 +632,7 @@ Four new test cases under `RealPairBackendRuntimeTest`:
 
 The test class went from 11 → 15 passing tests in this run.
 
-### Wire-up of real Keystore alias + pubkey into the persisted BondRecord (Deliverable 2)
+### Wire-up of real Keystore alias + pubkey into the persisted BondRecord (deliverable 2)
 
 The `LescResult.Bonded` data class now carries `keystoreAlias: String`
 and `phonePubkey: ByteArray` alongside `bondKey` + `peerName`.
@@ -658,7 +653,7 @@ Evidence:
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/api/PairBackend.kt`
   `LescResult.Bonded` carries `keystoreAlias` + `phonePubkey`.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/api/BondPersister.kt`
-  `BondRecord` (api-surface) carries `keystoreAlias` + `phonePubkey`.
+  `BondRecord` (API) carries `keystoreAlias` + `phonePubkey`.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt::runPostBondExchange`
   populates both fields on the `LescResult.Bonded` it completes.
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingViewModel.kt`
@@ -674,37 +669,33 @@ given a fake Keystore generator returning alias
 `syauth.ed25519.AABBCCDDEE01` and a canonical 32-byte pubkey, the
 `LescResult.Bonded` the backend resolves carries those exact values.
 
-### Radio-free Robolectric / JUnit unit test pinning the SPEC §3.2 D6 contract (Deliverable 3)
+### Radio-free Robolectric / JUnit unit test pinning the SPEC §3.2 D6 contract (deliverable 3)
 
 New file:
 `syauth-android/app/src/test/kotlin/com/sy/syauth/android/pair/KeystoreKeyGeneratorTest.kt`.
 Ten assertions:
 
-- `base_builder_pins_purpose_sign` — `spec.purposes == PURPOSE_SIGN`.
-- `base_builder_requires_user_authentication` —
-  `spec.isUserAuthenticationRequired == true` (SPEC §3.2 D6 verbatim
+- `base_builder_pins_purpose_sign`, `spec.purposes == PURPOSE_SIGN`.
+- `base_builder_requires_user_authentication`,   `spec.isUserAuthenticationRequired == true` (SPEC §3.2 D6 verbatim
   "setUserAuthenticationRequired(true) so the key can only sign when
   the user has authenticated").
-- `builder_with_strongbox_true_reports_strongbox_backed` —
-  `setIsStrongBoxBacked(true)` on the strong-spec attempt (SPEC §3.2
+- `builder_with_strongbox_true_reports_strongbox_backed`,   `setIsStrongBoxBacked(true)` on the strong-spec attempt (SPEC §3.2
   D6 verbatim "STRONGBOX when available").
-- `builder_with_strongbox_false_reports_not_strongbox_backed` — the
+- `builder_with_strongbox_false_reports_not_strongbox_backed`, the
   soft fallback spec reports `isStrongBoxBacked = false`.
-- `strongbox_ec_unsupported_marker_constant_pins_substring` — the
+- `strongbox_ec_unsupported_marker_constant_pins_substring`, the
   string `"StrongBox"` is the canonical match for the Galaxy S25
   Ultra fallback.
-- `strongbox_ec_unsupported_predicate_matches_galaxy_s25_message` —
-  the exact `"Unsupported StrongBox EC: Ed25519"` message triggers
+- `strongbox_ec_unsupported_predicate_matches_galaxy_s25_message`,   the exact `"Unsupported StrongBox EC: Ed25519"` message triggers
   the fallback.
-- `strongbox_ec_unsupported_predicate_ignores_unrelated_message` —
-  the predicate does NOT match `"EC may only use ECGenParameterSpec"`.
-- `strongbox_ec_unsupported_predicate_handles_null_message` — a null
+- `strongbox_ec_unsupported_predicate_ignores_unrelated_message`,   the predicate does NOT match `"EC may only use ECGenParameterSpec"`.
+- `strongbox_ec_unsupported_predicate_handles_null_message`, a null
   message does NOT trigger the StrongBox fallback.
-- `idempotent_re_pair_returns_existing_certificate_pubkey` — the
+- `idempotent_re_pair_returns_existing_certificate_pubkey`, the
   generator's `materialFromCertificate` helper returns the trailing
   32 bytes of the certificate's `SubjectPublicKeyInfo` and reports
   `strongBoxBacked = false` (no fresh generation happened).
-- `pre_tiramisu_runtime_throws_unsupported_api` — driving
+- `pre_tiramisu_runtime_throws_unsupported_api`, driving
   `Build.VERSION.SDK_INT = 32` via `ReflectionHelpers.setStaticField`
   makes `AndroidKeystoreKeyGenerator.generate(alias)` throw
   `KeystoreKeygenError.UnsupportedApi(sdkInt = 32)` BEFORE touching
@@ -729,55 +720,55 @@ production code path):
 All bullets of the previous-row criteria PLUS the three reopen-row
 bullets:
 
-1. **`git grep -l "InMemorySigningKeyProvider" -- syauth-android/app/src/main/` returns nothing.**
+1. `git grep -l "InMemorySigningKeyProvider" -- syauth-android/app/src/main/` returns nothing.
 
    ```
    $ git grep -l "InMemorySigningKeyProvider" -- syauth-android/app/src/main/
    (no output)
    ```
 
-2. **`git grep -l "// GAP: DEV-002"` returns nothing in production source paths.**
+2. `git grep -l "// GAP: DEV-002"` returns nothing in production source paths.
 
    ```
    $ git grep -l "// GAP: DEV-002" -- syauth-android/app/src/main/ crates/
    (no output)
    ```
 
-3. **The bond record on disk no longer carries the Ed25519 seed.**
+3. The bond record on disk no longer carries the Ed25519 seed.
 
    ```
    $ git grep "phoneSigningKeySeed\|PHONE_SIGNING_KEY_HEX" -- syauth-android/app/src/main/
    (no output)
    ```
 
-4. **The desktop-side build_response_frame surface does not accept a
-   raw signing seed.**
+4. The desktop-side build_response_frame API does not accept a
+   raw signing seed.
 
    ```
    $ git grep "build_response_frame.*seed\|build_response_frame.*signing_key\|buildResponseFrame.*seed"
    (no output)
    ```
 
-5. **The Keystore-backed signer in production code uses PURPOSE_SIGN +
-   Ed25519 + STRONGBOX (when supported) + setUserAuthenticationRequired.**
+5. The Keystore-backed signer in production code uses PURPOSE_SIGN +
+   Ed25519 + STRONGBOX (when supported) + setUserAuthenticationRequired.
 
    Proven by `KeystoreKeyGeneratorTest::base_builder_pins_purpose_sign`,
    `base_builder_requires_user_authentication`, and
-   `builder_with_strongbox_true_reports_strongbox_backed` — all three
+   `builder_with_strongbox_true_reports_strongbox_backed`, all three
    pass against the production builder helper.
 
-6. **`make scope-discipline` clean.** Pinned by tonight's gate run
+6. `make scope-discipline` clean. Pinned by tonight's gate run
    ("Scope-discipline grep clean.").
 
-7. **`make lint` clean.** Pinned by tonight's gate run ("advisories
+7. `make lint` clean. Pinned by tonight's gate run ("advisories
    ok, bans ok, licenses ok, sources ok / Linting complete").
 
-8. **`cargo test --workspace --all-targets --all-features` green;
-   passing count >= baseline 292.** Tonight's `make test` ships 311
+8. `cargo test --workspace --all-targets --all-features` green;
+   passing count >= baseline 292. Tonight's `make test` ships 311
    passing tests (well above the historical 292 baseline).
 
-9. **`docs/known-gaps.md` row DEV-002 moves from "Open deviations"
-   to "Closed deviations".** Done in this same commit; the closed-row
+9. `docs/known-gaps.md` row DEV-002 moves from "Open deviations"
+   to "Closed deviations". Done in this same commit; the closed-row
    carries this Closure Appendix as its pointer.
 
 #### Reopen-row bullets
@@ -785,8 +776,8 @@ bullets:
 The reopen-row adds three additional bullets the original closure did
 not require:
 
-10. **A real pair flow against the connected R5CY214FQHM device
-    produces a `BondRecord` containing a non-empty `keystoreAlias`.**
+10. A real pair flow against the connected R5CY214FQHM device
+    produces a `BondRecord` containing a non-empty `keystoreAlias`.
 
     Static evidence: the production code paths (RealPairBackend →
     PairingViewModel → DiskBondPersister) carry the alias through to
@@ -805,8 +796,8 @@ not require:
     closes the next time the operator runs `syauth pair --force` or
     revokes the bond manually.
 
-11. **`adb shell run-as com.sy.syauth.android cat <bonds.toml>`
-    shows zero bytes of Ed25519 private key material.**
+11. `adb shell run-as com.sy.syauth.android cat <bonds.toml>`
+    shows zero bytes of Ed25519 private key material.
 
     ```
     $ adb -s R5CY214FQHM shell run-as com.sy.syauth.android cat files/syauth-bond.toml
@@ -819,15 +810,15 @@ not require:
     ```
 
     The on-disk schema carries only `keystore_alias` and
-    `phone_pubkey_hex` — there is no `phone_signing_key_hex` field
+    `phone_pubkey_hex`, there is no `phone_signing_key_hex` field
     and no path in the parser or serializer that would write the
     Ed25519 private seed. The grep guard from bullet 3 above pins
     that mechanically. SPEC §3.2 D6 hard requirement met.
 
-12. **A full unlock (`pamtester syauth-test`) sends a challenge that
+12. A full unlock (`pamtester syauth-test`) sends a challenge that
     the phone signs via the Keystore alias and the desktop verifies;
     `/var/lib/syauth/last.log` records `success <peer_id>` with the
-    new bond's peer_id.**
+    new bond's peer_id.
 
     Out of scope for tonight's DEV-002 run. The on-radio unlock-flow
     TCs that prove the end-to-end sign-verify cycle live under
@@ -840,7 +831,7 @@ not require:
     signer end-to-end; running them requires `cargo test
     --test dev004_link_encryption -- --ignored` plus
     `SYAUTH_REAL_RADIOS=1` plus a live bonded phone. The pamtester
-    surface that wraps those primitives at the PAM stack level is
+    PAM interface for those functions at the PAM stack level is
     DEV-005 territory and not part of this row.
 
 ### Source-location relocation note

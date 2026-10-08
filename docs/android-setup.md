@@ -29,8 +29,12 @@ Ed25519 seed.
 `DIGEST_NONE`, `setUserAuthenticationRequired(true)`, and
 `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)`. Approval uses a
 `Signature("Ed25519")` bound to `BiometricPrompt.CryptoObject`. Each signing
-operation requires fresh strong biometric authentication. The phone prompt has
-no PIN/password fallback; the laptop's normal PAM password is independent.
+operation requires fresh strong biometric authentication. Each incoming request
+opens the fingerprint prompt automatically, without an extra Approve button tap.
+Dismissing that prompt returns to the Authorize/Disallow screen while the request
+is pending. Authorize reopens biometrics; Disallow rejects the request.
+The phone prompt has no PIN/password fallback; the laptop's normal PAM password
+is independent.
 
 These are the current implementation's parameters. The former description of a
 P-256 gate followed by a separate UniFFI seed signature no longer describes the
@@ -41,14 +45,14 @@ production approval path.
 Stop the desktop presence daemon and run `syauth pair --timeout-secs 300`.
 Select the advertising computer in the phone's system picker, compare and approve
 the six-digit system Bluetooth code, then compare and confirm the four-word app
-phrase on both sides. The picker may display **syauth** rather than the hostname.
+phrase on both sides. The picker may display syauth rather than the hostname.
 
 After the pair flow reaches success, tap Done. The Activity reloads the saved
 bond, updates Home, installs the companion providers and GATT factory, starts
 observing matching CDM associations, starts the foreground service, and schedules
 the watchdog. No app restart is needed. Start the desktop daemon afterward.
 
-The **desktop is the GATT peripheral**; the phone uses a persistent GATT client.
+The desktop is the GATT peripheral; the phone uses a persistent GATT client.
 `SyauthCompanionService` is a foreground service holding this connection, rather
 than a short-lived phone GATT server. Boot recovery and a periodic watchdog
 provide recovery paths. Force-stopping the app prevents Android background

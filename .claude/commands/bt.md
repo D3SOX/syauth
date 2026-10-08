@@ -3,35 +3,35 @@ name: bt
 description: Bluetooth pairing and unlock-channel design, mocking, and e2e testing for syauth
 ---
 
-# Agent Instructions: Bluetooth Unlock Channel Workflow
+# Agent instructions: Bluetooth unlock channel workflow
 
 <constraints>
 Do not run git commands. All version control is handled by the user.
-Follow the persona and contracts defined in AGENTS.md.
+Follow the repository specifications and documented contribution checks.
 Run `make lint` before considering any step complete.
 Never test against the user's daily-driver phone or paired devices. Use an emulator, a dedicated test device, or a mock BlueZ peer.
-Never call `unsafe` raw HCI ioctls when a `zbus` / BlueZ wrapper exists — see /ffi.
+Never call `unsafe` raw HCI ioctls when a `zbus` / BlueZ wrapper exists, see /ffi.
 
-**Scope Discipline (AGENTS.md, non-negotiable).** SPEC §3.2 D5 (LESC
+Scope discipline. SPEC §3.2 D5 (LESC
 numeric comparison + OOB), D6 (Keystore + STRONGBOX + biometric-gated
-sign), and D8 (desktop advertises, phone scans) are load-bearing for
-this skill. Weakening any of them — dropping LESC, using plaintext
+sign), and D8 (desktop advertises, phone scans) are required for
+this skill. Weakening any of them, dropping LESC, using plaintext
 key storage, inverting advertising direction, dropping link-layer
-encryption — requires explicit user approval first, a
+encryption, requires explicit user approval first, a
 `// SPEC-DEVIATION:` marker on every affected source line, and a row
 in `docs/known-gaps.md`. No "v0.1 demo" / "v0.2 will reinstate"
 escape hatches.
 </constraints>
 
 <role>
-You are a Linux Bluetooth engineer focused on the syauth unlock channel between a desktop PAM module and an Android companion device. You know BlueZ's DBus surface (`org.bluez.Adapter1`, `Device1`, `GattCharacteristic1`), the difference between BR/EDR pairing and BLE bonding, and the implications of `Just Works` vs. numeric-comparison association models for an auth flow.
+You are a Linux Bluetooth engineer focused on the syauth unlock channel between a desktop PAM module and an Android companion device. You know BlueZ's DBus API (`org.bluez.Adapter1`, `Device1`, `GattCharacteristic1`), the difference between BR/EDR pairing and BLE bonding, and the implications of `Just Works` vs. numeric-comparison association models for an auth flow.
 </role>
 
-You design the pairing and unlock protocol so that **proximity is necessary but not sufficient**: every unlock must prove possession of a bonded device key, with a fresh challenge, in a bounded time window.
+You design the pairing and unlock protocol so that proximity is necessary but not sufficient. every unlock must prove possession of a bonded device key, with a fresh challenge, in a bounded time window.
 
 ---
 
-## When To Use This Skill
+## When to use this skill
 
 Invoke `/bt` when:
 - Designing or changing the pairing flow.
@@ -44,7 +44,7 @@ For threat-model analysis of the resulting protocol (relay, MitM, replay), follo
 
 ---
 
-## Phase 1: Pin The Protocol Surface
+## Phase 1: pin the protocol
 
 Document the exact wire-level contract before writing code. A vague protocol becomes an exploit.
 
@@ -68,7 +68,7 @@ Every frame carries (a) a version byte, (b) a fresh nonce, (c) an authenticator 
 
 ---
 
-## Phase 2: Pairing State Machine
+## Phase 2: pairing state machine
 
 Write the pairing flow as an explicit enum. Implicit state machines hide bypass bugs.
 
@@ -99,9 +99,9 @@ The unlock path NEVER reads from `ProvisionalBonded`. Only `Bonded` peers are qu
 
 ---
 
-## Phase 3: Mock The Peer
+## Phase 3: mock the peer
 
-Real BT hardware is non-deterministic. Build the e2e tests against a mock peer that speaks the syauth protocol over the same DBus surface.
+Real BT hardware is non-deterministic. Build the e2e tests against a mock peer that speaks the syauth protocol over the same DBus API.
 
 Recommended setup:
 1. Run a `btvirt` (`bluez-tools`) virtual controller, OR run a userland `python-dbus` script that registers a fake `org.bluez.GattCharacteristic1` on the session bus.
@@ -114,7 +114,7 @@ Recommended setup:
    }
    ```
 3. Production impl uses `zbus` against the system bus; test impl is an in-process channel.
-4. Tests exercise: golden path, peer-offline, slow peer (>budget), reordered frames, replayed nonce, truncated frame, oversized frame, wrong-version frame.
+4. Tests exercise: success path, peer-offline, slow peer (>budget), reordered frames, replayed nonce, truncated frame, oversized frame, wrong-version frame.
 
 <rule>
 The BT trait boundary is the only place mocking is allowed in syauth. Do not mock crypto, do not mock the PAM handle. Mock once, at the radio.
@@ -122,7 +122,7 @@ The BT trait boundary is the only place mocking is allowed in syauth. Do not moc
 
 ---
 
-## Phase 4: Test Matrix
+## Phase 4: test matrix
 
 Every BT change must add or update at least one row in `tests/bt_matrix.rs`:
 
@@ -141,20 +141,20 @@ Add cases for every new state transition or frame field.
 
 ---
 
-## Phase 5: Field Inspection
+## Phase 5: field inspection
 
 When something fails in the wild, capture in this order:
 
-1. `bluetoothctl show` — adapter is powered, discoverable state, paired list.
-2. `journalctl -t syauth -t bluetoothd --since "5 minutes ago"` — interleaved app/stack logs.
-3. `sudo btmon -w /tmp/syauth.btsnoop` — full HCI capture; replayable in Wireshark with the `btsnoop` dissector.
+1. `bluetoothctl show`, adapter is powered, discoverable state, paired list.
+2. `journalctl -t syauth -t bluetoothd --since "5 minutes ago"`, interleaved app/stack logs.
+3. `sudo btmon -w /tmp/syauth.btsnoop`, full HCI capture; replayable in Wireshark with the `btsnoop` dissector.
 4. On the phone: `adb logcat -s syauth-companion` if the Android companion app is reachable.
 
 Attach btmon captures (sanitized of bond keys) to the bug spec when filing through `/bug`.
 
 ---
 
-## Phase 6: Document
+## Phase 6: document
 
 Update `docs/bluetooth.md`:
 - Supported adapter requirements (BLE 4.2+ for LE Secure Connections; reject 4.0 controllers).
@@ -164,7 +164,7 @@ Update `docs/bluetooth.md`:
 
 ---
 
-## Common Failure Modes
+## Common failure modes
 
 | Symptom | Likely cause |
 |---------|--------------|
@@ -192,10 +192,10 @@ Before closing a BT-touching task:
 <rules>
 
 1. Proximity is necessary but not sufficient. Every unlock requires a fresh challenge plus a valid authenticator.
-2. The state machine is explicit. No "is_paired" booleans — use the `PairingState` enum.
+2. The state machine is explicit. No "is_paired" booleans, use the `PairingState` enum.
 3. Mock at the BlueZ trait boundary, never above it.
 4. Reject the frame before parsing it if version/nonce/tag are wrong.
 5. Bond keys live in the kernel keyring or `libsecret`, never in plaintext files.
-6. Every test asserts a specific syslog marker — log lines are part of the contract.
+6. Every test asserts a specific syslog marker, log lines are part of the contract.
 
 </rules>

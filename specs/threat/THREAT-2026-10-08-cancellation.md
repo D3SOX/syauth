@@ -18,7 +18,7 @@ authenticated v1 frame and is interpreted only after UniFFI verification.
 | Android UI | Verify MAC and match peer/nonce | Host cancellation is distinct from denial | No key export | Cancel only matching activity | Late callbacks suppressed |
 | Bond store/pairing/CLI/config | Unchanged by this addition | Existing audit | Existing storage risks | Existing recovery | Existing boundaries |
 
-Canonical abuse paths:
+Listed abuse paths:
 1. Relay: cancellation does not enable a signed response; phone approval remains
    a fresh, hardware-gated gesture. Radio relay can still cause disruption.
 2. Replay: an old cancellation does not match a fresh challenge nonce. Replaying

@@ -1,22 +1,22 @@
-# JOURNEY-S-013: Remove `DirectGattController` (tonight's hot-fix path)
+# JOURNEY-S-013: remove `DirectGattController` (tonight's hot-fix path)
 
-> **Spec anchors:** `specs/unlock-proximity/SPEC.md` §3 scope item #19
-> — "`AndroidCdmPairCompanionScanner.startObservingDevicePresence` is
+> Spec anchors. `specs/unlock-proximity/SPEC.md` §3 scope item #19,
+> "`AndroidCdmPairCompanionScanner.startObservingDevicePresence` is
 > KEPT as a belt-and-suspenders signal for the foreground service's
 > watchdog (re-launches if killed and proximity event fires), but the
 > primary connection path is the `autoConnect=true` GATT client. The
 > "tonight's hot-fix" CDM-only path is removed."
 >
-> §3.2 D8 — "no fallback hot-fix CDM-only path" (anchored in
+> §3.2 D8, "no fallback hot-fix CDM-only path" (anchored in
 > `ROADMAP.md` Traceability matrix row S-013).
 >
-> §3 row "Phone connection lifecycle" — "One persistent `BluetoothGatt`
+> §3 row "Phone connection lifecycle", "One persistent `BluetoothGatt`
 > per bonded peer, opened with `autoConnect=true` and held by
 > `SyauthCompanionService` as a long-running foreground service."
 >
-> **Roadmap row:** `specs/unlock-proximity/ROADMAP.md` Step S-013.
+> Roadmap row. `specs/unlock-proximity/ROADMAP.md` Step S-013.
 >
-> **Closure condition (verbatim from ROADMAP.md):**
+> Closure condition (verbatim from ROADMAP.md).
 >
 > ```
 > git ls-files syauth-android/ | grep DirectGattController   # empty
@@ -24,7 +24,7 @@
 > ./gradlew :app:testDebugUnitTest
 > ```
 
-## Roadmap Link
+## Roadmap link
 - Source roadmap: [specs/unlock-proximity/ROADMAP.md](../unlock-proximity/ROADMAP.md) Step S-013.
 - Feature: delete the `DirectGattController.kt` file together with the
   `GattControllerFactory` extension point on `SyauthCompanionService`
@@ -34,24 +34,24 @@
   installed by S-011); there is no longer a CDM-style
   `handleDeviceAppeared`/`Disappeared` codepath on the service. The
   `AndroidCdmPairCompanionScanner.startObservingDevicePresence`
-  watchdog signal stays — that's the belt-and-suspenders kept by SPEC
+  watchdog signal stays, that's the belt-and-suspenders kept by SPEC
   §3 item #19.
 
 ## 1. Journey
 
-When **an Android user has paired their phone with the desktop and
+When an Android user has paired their phone with the desktop and
 the foreground `SyauthCompanionService` is alive holding one
 `PersistentGattClient` per bonded peer (the S-011 persistent path),
-and the desktop emits a fresh `sudo` challenge frame**, I want to
-**only one Android-side code path delivers that frame to
-`ApproveNotification.show` — the `PersistentGattClient` notify
-callback — and never the legacy `DirectGattController` opened by the
-CDM `handleDeviceAppeared` hot-fix**, so I can **eliminate the
+and the desktop emits a fresh `sudo` challenge frame, I want to
+only one Android-side code path delivers that frame to
+`ApproveNotification.show`, the `PersistentGattClient` notify
+callback, and never the legacy `DirectGattController` opened by the
+CDM `handleDeviceAppeared` hot-fix, so I can eliminate the
 duplicate-frame delivery the S-007 nonce LRU has been silently
-absorbing on every unlock, shrink the surface area `pam_syauth`
+absorbing on every unlock, reduce the code `pam_syauth`
 trusts, and keep the SPEC §3.2 D8 "no fallback hot-fix CDM-only
-path" invariant load-bearing rather than a comment-anchored
-aspiration**.
+path" invariant required rather than a comment-anchored
+aspiration.
 
 ## 2. CJM
 
@@ -64,27 +64,27 @@ for the persistent path. S-011 deliberately kept Option A: both the
 legacy `DirectGattController` factory (still installed by
 `installGattControllerFactory`) and the new persistent path coexisted
 so the demo could ship while the persistent path bedded in. S-007's
-nonce LRU on the daemon side hid the duplicate-frame artifact — every
+nonce LRU on the daemon side hid the duplicate-frame artifact, every
 challenge arrived once via the persistent notify callback and once
 via the CDM-triggered direct controller, and `pam_syauth` accepted
 the first and dropped the second.
 
 S-013 closes the loop. The persistent path has been observed live
 (S-011 closure) and the duplicate path is now technical debt: a
-parallel implementation that obscures which code actually drives
+parallel implementation that obscures which code drives
 unlock, a manifest-grade SPEC deviation surviving on inertia, and an
 attack-surface multiplier. This step deletes the file, deletes the
 seam, deletes the `MainActivity` installer, and deletes the
 instrumented test that asserted the CDM-style binding (which, after
 S-011, never fires for a primary unlock anyway).
 
-### Phase 1: Before deletion — the two paths coexist
+### Phase 1: before deletion, the two paths coexist
 
-**User Intent:** The user is unaware of the topology; they just want
+User intent. The user is unaware of the topology; they just want
 `sudo` to unlock. The codebase carries both paths because S-011
 chose Option A.
 
-**Actions:** None at the user level. At the system level: the
+Actions. None at the user level. At the system level: the
 desktop emits a challenge notification on
 `SYAUTH_CHALLENGE_CHAR_UUID`; the persistent `BluetoothGatt` (opened
 with `autoConnect=true` at service start) receives it in
@@ -95,12 +95,12 @@ legacy `gattControllerFactory` opens a *second* `BluetoothGatt`, runs
 its own discover/subscribe, and forwards the same frame through the
 direct path.
 
-**Pain / Risk:**
+Pain / risk.
 - Two GATT clients held open per bonded peer doubles the BLE link
   cost (radio + memory) for no functional gain.
 - `pam_syauth` sees the same nonce twice on every unlock; the S-007
   nonce LRU absorbs it silently, which means a future drift in the
-  nonce window (e.g., an S-007 cache shrink) would surface as a
+  nonce window (e.g., an S-007 cache shrink) would appear as a
   "random" unlock-fail instead of a "two paths are sending duplicate
   frames" symptom.
 - The CDM hot-fix path is the SPEC §3.2 D8 deviation kept alive only
@@ -108,20 +108,20 @@ direct path.
   As long as it's wired, every reviewer has to know to ignore it.
 - Reviewers reading the wire-up see two installers
   (`installGattControllerFactory` + `installPersistentClientFactory`)
-  and cannot tell which one is load-bearing without
+  and cannot tell which one is required without
   cross-referencing the SPEC.
 
-**Success Signal:** `git grep -n "DirectGattController" syauth-android/`
+Success signal. `git grep -n "DirectGattController" syauth-android/`
 returns non-empty results in `MainActivity.kt`,
 `SyauthCompanionService.kt`, and the `bg/DirectGattController.kt` file
-itself — the canonical "this is the state to leave behind" probe.
+itself, the canonical "this is the state to leave behind" probe.
 
-### Phase 2: Deletion — file, seam, wire-up, test all go
+### Phase 2: deletion, file, seam, wire-up, test all go
 
-**User Intent:** The user still wants `sudo` to unlock. The
+User intent. The user still wants `sudo` to unlock. The
 deletion must be transparent at the user level.
 
-**Actions:**
+Actions.
 1. Delete `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/DirectGattController.kt`.
 2. Remove the `GattControllerFactory` interface declaration from
    `SyauthCompanionService.kt` (the `public fun interface` block).
@@ -133,7 +133,7 @@ deletion must be transparent at the user level.
    field and the matching tear-down loop in `onDestroy`.
 6. Remove `installGattControllerFactory(record)` and its call in
    `installCompanionSeams` in `MainActivity.kt`.
-7. Delete the instrumented `CdmLifecycleTest.kt` — every one of its
+7. Delete the instrumented `CdmLifecycleTest.kt`, every one of its
    three test methods constructs a `GattControllerFactory` and drives
    `handleDeviceAppeared`/`Disappeared`, both of which no longer
    exist. The persistent path has its own JVM coverage in
@@ -144,40 +144,40 @@ deletion must be transparent at the user level.
    `PersistentGattClient.kt`) so the grep probe is mechanically
    empty.
 
-**Pain / Risk:**
+Pain / risk.
 - `GattServerController` is still in use by `BleScanController.kt`
   (the inverted-role implementation introduced for the DEV-003
-  phone-side advertising path) — must NOT be removed. The deletion
+  phone-side advertising path), must NOT be removed. The deletion
   scope is the `GattControllerFactory` extension point, not the
   underlying `GattServerController` interface.
 - `SYAUTH_CHALLENGE_CHAR_UUID` and `SYAUTH_RESPONSE_CHAR_UUID` are
   declared in `bg/GattServer.kt`, not in `DirectGattController.kt`,
   so the deletion does not orphan them and no `GattConstants.kt`
   move is required.
-- The `CdmLifecycleTest.kt` androidTest is the only test surface
+- The `CdmLifecycleTest.kt` androidTest is the only test interface
   that asserted the CDM-style binding lifecycle. Its deletion is
-  load-bearing for the deletion to compile against the androidTest
-  source set — leaving it would surface as a compile error on
+  required for the deletion to compile against the androidTest
+  source set, leaving it would appear as a compile error on
   `:app:assembleDebugAndroidTest`.
 
-**Success Signal:** `git grep -n "DirectGattController" syauth-android/`
+Success signal. `git grep -n "DirectGattController" syauth-android/`
 returns an empty result. `git grep -n "GattControllerFactory" syauth-android/`
 also returns empty. `:app:assembleDebug` and
 `:app:testDebugUnitTest` are both green.
 
-### Phase 3: After — only the persistent path emits challenges
+### Phase 3: after, only the persistent path emits challenges
 
-**User Intent:** The user `sudo`s on the desktop. The phone signs
+User intent. The user `sudo`s on the desktop. The phone signs
 the challenge and the unlock completes.
 
-**Actions:** Desktop emits a notify on `SYAUTH_CHALLENGE_CHAR_UUID`;
+Actions. Desktop emits a notify on `SYAUTH_CHALLENGE_CHAR_UUID`;
 the single persistent `BluetoothGatt` per bonded peer receives it in
 `onCharacteristicChanged`; the `PersistentManagedClient` (held by
 `SyauthCompanionService`) routes the bytes to the approve flow; the
 approve flow signs and writes the response on
 `SYAUTH_RESPONSE_CHAR_UUID` through the same handle.
 
-**Pain / Risk:**
+Pain / risk.
 - A future contributor re-introducing a CDM-style binding would
   have to add a brand-new factory + interface; the path no longer
   has a "default-off" knob to flip.
@@ -185,25 +185,25 @@ approve flow signs and writes the response on
   nonce LRU's role narrower (it now only defends against actual
   network replay, not against our own duplicate emission). That
   reduction is the win, not a risk.
-- `make scope-discipline` enforcement is now stricter — the
+- `make scope-discipline` enforcement is now stricter, the
   `// Survives until S-013` comment that anchored the legacy seam
   is gone, and `git grep -F "S-013 retires"` returns empty so no
   ROADMAP-anchored future-tense excuse remains in the codebase.
 
-**Success Signal:** Every challenge frame at `pam_syauth` carries a
+Success signal. Every challenge frame at `pam_syauth` carries a
 fresh nonce; the S-007 nonce LRU stops absorbing duplicates;
 `git grep -nE "GattControllerFactory|handleDeviceAppeared|handleDeviceDisappeared" syauth-android/`
 returns empty.
 
-### Friction and Opportunity
+### Friction and opportunity
 
 | Friction | Phase | Opportunity |
 |----------|-------|-------------|
-| Two installers in `MainActivity.installCompanionSeams` (`installGattControllerFactory` + `installPersistentClientFactory`) make it ambiguous which one drives unlock | 1 | After deletion, `installCompanionSeams` calls only `installPersistentClientFactory`; reviewers see a single load-bearing wire-up. |
+| Two installers in `MainActivity.installCompanionSeams` (`installGattControllerFactory` + `installPersistentClientFactory`) make it ambiguous which one drives unlock | 1 | After deletion, `installCompanionSeams` calls only `installPersistentClientFactory`; reviewers see a single required wire-up. |
 | `CdmLifecycleTest` androidTest asserts a binding lifecycle that no longer fires for a primary unlock after S-011 | 1 | Delete the test along with the seam it covered; the persistent path's JVM-side coverage (`SyauthCompanionServiceTest`) is the new source of truth. |
 | `SyauthCompanionService.controllers` map holds entries only the legacy CDM path populates; the field still gets cleared in `onDestroy` for no functional reason | 1 | Removing it shrinks the service's mutable state and clarifies that the only resource the service owns at runtime is the per-bond `ManagedClient` map. |
 
-### North Star Summary
+### Expected outcome
 
 After S-013 closes, the syauth Android app has exactly one Android
 → desktop unlock path: the foreground `SyauthCompanionService` holds
@@ -218,56 +218,56 @@ for `DirectGattController` returns empty. SPEC §3.2 D8 "no fallback
 hot-fix CDM-only path" goes from comment-anchored to
 grep-anchored.
 
-## 3. UX Implementation and Assessment
+## 3. UX implementation and assessment
 
-### Time to First Value
+### Time to first value
 - [x] Unlock latency is unchanged at the user level: the persistent
       path was already running, so SPEC §4.3 < 2.0 s budget is
       preserved.
-- [x] No onboarding step changes — the user does not interact with
+- [x] No onboarding step changes, the user does not interact with
       either path directly.
 
-### Onboarding Clarity
-- [x] No new operator surface introduced; deletion-only step.
+### Onboarding clarity
+- [x] No new operator command introduced; deletion-only step.
 - [x] Error messages on the foreground service (`appeared peer=N but
       no factory installed`) disappear because the call site goes
       away.
 
-### Production-Ready Defaults
+### Production-ready defaults
 - [x] After deletion, the only Android-side default is the persistent
       `autoConnect=true` client. There is no toggle.
 - [x] The `MainActivity` wire-up is a single installer call,
       `installPersistentClientFactory`.
 
-### Golden Path Quality
+### Success path checks
 - [x] The unlock flow continues to work end-to-end via the
       persistent path; duplicate frames stop arriving at
       `pam_syauth`.
 - [x] `:app:testDebugUnitTest` covers the persistent path
       end-to-end via `SyauthCompanionServiceTest`.
 
-### Decision Load
+### Decision load
 - [x] One installer in `installCompanionSeams` instead of two
       reduces reviewer decision load.
 - [x] `SyauthCompanionService.companion` exposes one factory seam
       (`gattClientFactory`) instead of two.
 
-### Progressive Complexity
+### Progressive complexity
 - [x] No new opt-in features added; the codebase shrinks.
 - [x] The remaining `GattServerController` interface (used by
       `BleScanController`) is unchanged.
 
-### Error Quality
+### Error quality
 - [x] No new error paths introduced.
 - [x] The deletion does not silence any error the user previously
-      saw — it removes a *successful* duplicate path.
+      saw, it removes a *successful* duplicate path.
 
-### Failure Safety
+### Failure safety
 - [x] `make scope-discipline` enforces no orphan future-tense
       anchors after the deletion.
 - [x] `:app:assembleDebug` is the compile-level mechanical probe.
 
-### Runtime Transparency
+### Runtime transparency
 - [x] After deletion, every `Log.i(SYAUTH_BG_LOG_TAG, ...)` line in
       a single unlock attempt corresponds to exactly one frame.
 - [x] No hidden duplicate-frame state.
@@ -277,52 +277,52 @@ grep-anchored.
       `challenge frame received` per unlock instead of two.
 - [x] The `syauth.bg.direct` log tag disappears with the file.
 
-### Cross-Surface Consistency
+### Consistency across interfaces
 - [x] The persistent path is the only documented path in SPEC §3
       "Phone connection lifecycle"; the codebase now matches.
 - [x] Terminology (`PersistentGattClient`, `ManagedClient`,
       `GattClientFactory`) is the only vocabulary that remains.
 
-### Workflow Consistency
+### Workflow consistency
 - [x] `MainActivity.installCompanionSeams` continues to follow the
       "install seam → start service" sequence; the inner call set
       shrinks by one.
 - [x] No artifact-layout changes.
 
-### Change Safety
+### Change safety
 - [x] The closure-condition grep is the mechanical preview.
 - [x] No silent user customizations are touched.
 
-### Experimentation Safety
+### Experimentation safety
 - [x] The deletion is fully reversible by `git revert` until merged.
 - [x] No `cfg(demo)` or build-flag remnants left behind.
 
-### Interaction Latency
-- [x] Unchanged — same persistent connection.
+### Interaction latency
+- [x] Unchanged, same persistent connection.
 - [x] No new I/O on the deletion path.
 
-### Developer Feedback Speed
+### Developer feedback speed
 - [x] `:app:assembleDebug` exit code is the immediate compile-level
       gate.
 - [x] `:app:testDebugUnitTest` exit code is the immediate
       behavior-level gate.
 
-### Team Scale
+### Team scale
 - [x] One fewer wire-up to teach new contributors.
 - [x] The SPEC-deviation comment anchor disappears, so reviewers no
       longer have to remember the exception.
 
-### System Scale
+### System scale
 - [x] One fewer `BluetoothGatt` handle per bonded peer at idle.
 - [x] One fewer log-tag domain to forward to crashlytics-style
       tooling.
 
-### Right Behavior by Default
+### Right behavior by default
 - [x] After deletion, the default Android-side topology is the SPEC
       §3 canonical one.
 - [x] No flag exists to toggle the legacy path back on.
 
-### Anti-Bypass Design
+### Anti-bypass design
 - [x] `make scope-discipline` enforces no orphan `// Survives until
       S-013` anchors.
 - [x] The `git grep "DirectGattController"` empty assertion is the
@@ -332,47 +332,47 @@ grep-anchored.
 
 ### TC-01: `:app:assembleDebug` compiles after deletion
 
-**Given** the deletion of `DirectGattController.kt`, the
+Given the deletion of `DirectGattController.kt`, the
 `GattControllerFactory` interface, the `gattControllerFactory`
 companion field, the `handleDeviceAppeared` / `handleDeviceDisappeared`
 methods, the `controllers` map, and `installGattControllerFactory`.
-**When** Gradle runs `:app:assembleDebug`.
-**Then** the build succeeds with no compile error referring to any
+When Gradle runs `:app:assembleDebug`.
+Then the build succeeds with no compile error referring to any
 of those removed symbols and no orphan import.
 
 ### TC-02: `:app:testDebugUnitTest` stays green
 
-**Given** the deletion above plus the deletion of `CdmLifecycleTest.kt`
+Given the deletion above plus the deletion of `CdmLifecycleTest.kt`
 (orphaned androidTest).
-**When** Gradle runs `:app:testDebugUnitTest`.
-**Then** every JVM unit test passes — `SyauthCompanionServiceTest`
+When Gradle runs `:app:testDebugUnitTest`.
+Then every JVM unit test passes, `SyauthCompanionServiceTest`
 in particular, which covers the persistent path
 (`starts_foreground_with_connected_device_type`,
 `injects_one_gatt_client_per_bond`, `stops_clients_on_destroy`).
 
 ### TC-03: `git grep` for the deleted symbols is empty
 
-**Given** the deletion has happened.
-**When** the reviewer runs `git grep -n "DirectGattController" syauth-android/`
+Given the deletion has happened.
+When the reviewer runs `git grep -n "DirectGattController" syauth-android/`
 and `git grep -n "GattControllerFactory" syauth-android/`.
-**Then** both invocations return zero lines — the SPEC §3.2 D8
+Then both invocations return zero lines, the SPEC §3.2 D8
 "no fallback hot-fix CDM-only path" invariant is grep-anchored, not
 comment-anchored.
 
 ### TC-04: `make scope-discipline` is clean after the deletion
 
-**Given** the deletion has happened and the orphan
+Given the deletion has happened and the orphan
 `// Survives until S-013` anchor in `SyauthCompanionService.kt` is
 gone.
-**When** the operator runs `make scope-discipline`.
-**Then** the target reports `Scope-discipline grep clean.` and exits
+When the operator runs `make scope-discipline`.
+Then the target reports `Scope-discipline grep clean.` and exits
 zero.
 
-### TC-05: One installer remains in `MainActivity.installCompanionSeams`
+### TC-05: one installer remains in `MainActivity.installCompanionSeams`
 
-**Given** the deletion has happened.
-**When** the reviewer reads `MainActivity.installCompanionSeams`.
-**Then** the body calls `installPersistentClientFactory` exactly once
+Given the deletion has happened.
+When the reviewer reads `MainActivity.installCompanionSeams`.
+Then the body calls `installPersistentClientFactory` exactly once
 and contains no other GATT-factory installer.
 
 ## Traceability
@@ -384,7 +384,7 @@ and contains no other GATT-factory installer.
   - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/PersistentGattClient.kt` (comment scrub).
   - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/BleScanController.kt` (comment scrub).
 - Test files:
-  - `syauth-android/app/src/androidTest/kotlin/com/sy/syauth/android/bg/CdmLifecycleTest.kt` (deleted — orphaned by the seam removal; the persistent path's JVM coverage in `SyauthCompanionServiceTest.kt` is the new authority).
+  - `syauth-android/app/src/androidTest/kotlin/com/sy/syauth/android/bg/CdmLifecycleTest.kt` (deleted, orphaned by the seam removal; the persistent path's JVM coverage in `SyauthCompanionServiceTest.kt` is the new authority).
 
 ## Implementation
 
@@ -392,8 +392,8 @@ and contains no other GATT-factory installer.
 - `specs/journeys/JOURNEY-S-013-remove-direct-gatt-controller.md` (this document).
 
 ### Files modified
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/SyauthCompanionService.kt`
-  — removed the `GattControllerFactory` `public fun interface`, the
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/SyauthCompanionService.kt`,
+removed the `GattControllerFactory` `public fun interface`, the
   `controllers: ConcurrentHashMap<Int, GattServerController>` field
   and its `onDestroy` tear-down loop, the
   `handleDeviceAppeared` / `handleDeviceDisappeared` public methods,
@@ -401,22 +401,22 @@ and contains no other GATT-factory installer.
   `gattControllerFactory` field, its entry in `resetSeams()`, the
   unused `android.companion.AssociationInfo` import, and the legacy
   reference in the file-header comment.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/MainActivity.kt`
-  — removed the `installGattControllerFactory(record)` helper and
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/MainActivity.kt`,
+removed the `installGattControllerFactory(record)` helper and
   its call from `installCompanionSeams`.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/PersistentGattClient.kt`
-  — file-header comment scrubbed; no behavioural change.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/BleScanController.kt`
-  — KDoc on `SyauthBleScannerController` scrubbed of the
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/PersistentGattClient.kt`,
+file-header comment scrubbed; no behavioural change.
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/BleScanController.kt`,
+KDoc on `SyauthBleScannerController` scrubbed of the
   `gattControllerFactory` mention; no behavioural change.
-- `specs/unlock-proximity/ROADMAP.md` — DoD bullets ticked,
+- `specs/unlock-proximity/ROADMAP.md`, DoD bullets ticked,
   Traceability paragraph appended to Step S-013.
 
 ### Files deleted
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/DirectGattController.kt`
-  — the 154-line CDM-only hot-fix path called out in the roadmap.
-- `syauth-android/app/src/androidTest/kotlin/com/sy/syauth/android/bg/CdmLifecycleTest.kt`
-  — the only test surface that asserted the removed
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/DirectGattController.kt`,
+the 154-line CDM-only hot-fix path called out in the roadmap.
+- `syauth-android/app/src/androidTest/kotlin/com/sy/syauth/android/bg/CdmLifecycleTest.kt`,
+the only test interface that asserted the removed
   `handleDeviceAppeared` / `handleDeviceDisappeared` /
   `gattControllerFactory` symbols. Orphaned by construction once
   those symbols go.

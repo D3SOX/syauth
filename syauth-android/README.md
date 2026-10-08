@@ -2,26 +2,30 @@
 
 Android companion app for the syauth phone-as-key unlock protocol.
 
-## Status
+## Setup and behavior
 
-| Roadmap item | What landed                                                             |
-|--------------|-------------------------------------------------------------------------|
-| S-001        | Gradle placeholder (settings.gradle.kts, app/.gitkeep).                 |
-| **S-015**    | Real Gradle + Compose scaffold. Single hello-world screen consuming the |
-|              | `syauth_mobile.aar` (S-014) and rendering the OOB code for a fixture    |
-|              | bond key. **No Bluetooth code yet** — proves the toolchain end-to-end.  |
+Follow [the tested Arch/KDE installation guide](../docs/getting-started.md) to
+build, install, and pair the app, then enable [sudo and KDE unlock](../docs/pam.md).
+The app includes Bluetooth pairing, persistent GATT connections, foreground
+service recovery, and per-request Keystore biometric signing.
 
-The structure mirrors `~/sources/prrr/prrr-android/` line-for-line; see
-[`specs/journeys/JOURNEY-S-015-android-scaffold.md`](../specs/journeys/JOURNEY-S-015-android-scaffold.md)
-for the per-file delta table.
+Tapping Done after pairing updates Home and starts the connection service without
+an app restart. Authentication opens the fingerprint prompt automatically.
+Dismissing it returns to Authorize/Disallow; Authorize retries and Disallow
+rejects. Host cancellation or timeout closes the pending approval.
+
+Although the APK's minimum SDK is 26, production pairing needs Android 13/API 33+
+and Keystore Ed25519 support. See [Android requirements](../docs/android-setup.md).
+The physical acceptance tests used a Pixel 8 Pro on Android 16.
 
 ## Build
 
-S-015 ships **debug-only**. Release signing + R8 land later.
+The installation guide builds a debug APK. Update with the same debug signing
+key to preserve app data. The release build does not enable R8 minification.
 
 Prerequisites on the build host:
 
-- JDK 17+ (AGP 8.2.x requirement). The `JAVA_HOME` env var must point at it.
+- OpenJDK 21 for the tested build. Set `JAVA_HOME` to that installation.
 - Android SDK with `cmdline-tools;latest` and `platforms;android-34`.
 - The `syauth_mobile.aar` produced by `make android-aar` from the workspace
   root. On hosts without the Android NDK, `make android-aar-dry-run` verifies
@@ -33,13 +37,18 @@ From this directory:
 ./gradlew :app:assembleDebug
 ```
 
-The resulting APK lands at `app/build/outputs/apk/debug/app-debug.apk`. The
-DoD asserts the size is under 10 MB.
+The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+Build the AAR and generated Kotlin bindings before running Gradle; the
+[installation guide](../docs/getting-started.md) includes the UniFFI CLI setup.
 
 ## Test
 
+Run the JVM/Robolectric tests from this directory with
+`./gradlew :app:testDebugUnitTest`. These cover pairing completion, approval
+callbacks, manual retry, and host cancellation.
+
 The instrumented `HelloWorldTest` launches `MainActivity` on a connected
-device or emulator and asserts the OOB string rendered:
+device or emulator and checks the OOB display:
 
 ```bash
 # From the workspace root:
@@ -52,7 +61,7 @@ make android-test
   (run `make android-aar` on an NDK-equipped host first), or
 - no emulator / device is connected over `adb`.
 
-## Versions (mirrors prrr-android)
+## Pinned versions
 
 | Component                    | Version           | Source line in prrr-android        |
 |------------------------------|-------------------|------------------------------------|

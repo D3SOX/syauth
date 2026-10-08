@@ -1,9 +1,9 @@
-# JOURNEY-S-021: Packaging — Fedora RPM, Debian deb, signed APK release
+# JOURNEY-S-021: packaging, Fedora RPM, Debian deb, signed APK release
 
 <!-- Authored per .agents/skills/journey/SKILL.md template. -->
 
-## Roadmap Link
-- Source roadmap: [specs/syauth/ROADMAP.md](../syauth/ROADMAP.md) — item **S-021**.
+## Roadmap link
+- Source roadmap: [specs/syauth/ROADMAP.md](../syauth/ROADMAP.md), item S-021.
 - Feature: produce one-command install paths for syauth v0.1.0 on the
   three supported platforms (Fedora 39+, Debian 12 / Ubuntu 22.04+,
   Android 8+), drive the build of each artifact from a single
@@ -14,14 +14,14 @@
 
 ## 1. Journey
 
-When **a Linux user who has already paired their phone with the syauth
+When a Linux user who has already paired their phone with the syauth
 Android companion wants to install the desktop side from a trusted
-package** I want to **download a single signed `.rpm`, `.deb`, or
+package I want to download a single signed `.rpm`, `.deb`, or
 `.apk` from the syauth v0.1.0 GitHub Release page, run one install
-command, and see `syauth --version` print `syauth 0.1.0`** so I can
-**audit the supply chain (signature, checksum, dependency closure) and
+command, and see `syauth --version` print `syauth 0.1.0` so I can
+audit the supply chain (signature, checksum, dependency closure) and
 roll back cleanly via the system package manager rather than
-hand-managing files under `/usr/lib64/security/`**.
+hand-managing files under `/usr/lib64/security/`.
 
 ## 2. CJM
 
@@ -29,8 +29,8 @@ S-001..S-020 produced the bits: the workspace builds
 `target/release/libpam_syauth.so` and `target/release/syauth`, the
 Android module produces `app-debug.apk`, and the threat model
 (THREAT-2026-05-15) names every file-mode and storage path syauth
-relies on. What S-021 does is **wrap those bits in shipping
-containers**: an RPM that drops the `.so` under `%{_libdir}/security/`
+relies on. What S-021 does is wrap those bits in shipping
+containers: an RPM that drops the `.so` under `%{_libdir}/security/`
 with mode 0644 and the binary under `%{_bindir}` with mode 0755, a
 Debian package that mirrors the layout for Debian's
 `/usr/lib/x86_64-linux-gnu/security/` path, and a release-signed APK
@@ -40,24 +40,24 @@ in clean runners and attaches them to the release.
 
 The four non-negotiables for this item:
 
-1. **Every install path is one command.** `dnf install ./*.rpm`,
+1. Every install path is one command. `dnf install ./*.rpm`,
    `apt install ./*.deb`, `adb install ./*.apk` (or sideload via
    `Settings → Allow from this source`). No "first install
    prerequisites, then…" instructions; the package metadata declares
    every runtime dep and the package manager resolves the closure.
-2. **Every artifact is verifiable.** The RPM carries `%license LICENSE`
+2. Every artifact is verifiable. The RPM carries `%license LICENSE`
    and is checked by `rpm --checksig`. The deb is checked by
    `dpkg --verify`. The APK is checked by `apksigner verify
    --print-certs`. The release page names all three commands so a
    security-conscious user audits the supply chain in three lines.
-3. **Every file mode matches SPEC §6 + THREAT-2026-05-15.** The PAM
+3. Every file mode matches SPEC §6 + THREAT-2026-05-15. The PAM
    `.so` is 0644 (world-readable, root-writable; loaded by every
    `auth` PAM stack), `syauth` is 0755, `/var/lib/syauth/` is 0700
    (created lazily in `%post` / `postinst` so the bond store is
    inaccessible to non-root), and (when present)
    `/var/lib/syauth/bonds.toml` is 0600. Re-install never widens
    those modes.
-4. **The dev box is not a release host.** Every Makefile target gates
+4. The dev box is not a release host. Every Makefile target gates
    on the corresponding tool (`which mock`, `which pbuilder`,
    `which apksigner`) and prints a one-line skip message + exit 0 if
    absent. The GH Actions runners are the only host that produces
@@ -66,11 +66,11 @@ The four non-negotiables for this item:
 
 ### Phase 1: RPM install on Fedora 39+
 
-**User Intent:** Install syauth from the official v0.1.0 release on a
+User intent. Install syauth from the official v0.1.0 release on a
 clean Fedora 39 (or newer) host and run `syauth --version` to confirm
 the binary is on `PATH` and the PAM `.so` is on the loader path.
 
-**Actions:**
+Actions.
 1. User opens the v0.1.0 GitHub Release page.
 2. User runs
    `sudo dnf install
@@ -83,7 +83,7 @@ the binary is on `PATH` and the PAM `.so` is on the loader path.
    if missing.
 6. User runs `syauth --version`; output begins with `syauth 0.1.0`.
 
-**Pain / Risk:**
+Pain / risk.
 - SELinux blocks the PAM `.so` load because the file's context is
   not `lib_t`: the RPM spec installs into `%{_libdir}/security/`
   with the default `lib_t` context; `restorecon` is invoked
@@ -99,20 +99,20 @@ the binary is on `PATH` and the PAM `.so` is on the loader path.
   `%preun` deliberately does nothing.
 - User attempts a re-install on a host with a locked bond store
   (`bonds.toml` 0600 root): the `%post` scriptlet's `install -d`
-  invocation is idempotent — it only `chmod`s if the directory was
+  invocation is idempotent, it only `chmod`s if the directory was
   freshly created, so an existing 0600 file is untouched.
 
-**Success Signal:** `syauth --version` exits 0 and stdout starts with
+Success signal. `syauth --version` exits 0 and stdout starts with
 `syauth 0.1.0`. `rpm -qV syauth` lists no missing files. `ls -l
 /usr/lib64/security/pam_syauth.so` shows mode `0644`.
 
 ### Phase 2: deb install on Debian 12 / Ubuntu 22.04
 
-**User Intent:** Install syauth on a Debian 12 desktop (or Ubuntu
+User intent. Install syauth on a Debian 12 desktop (or Ubuntu
 22.04 LTS / 24.04 LTS) using the same one-line apt invocation pattern
 as the RPM path.
 
-**Actions:**
+Actions.
 1. User downloads `syauth_0.1.0-1_amd64.deb` from the release page.
 2. User runs `sudo apt install ./syauth_0.1.0-1_amd64.deb` (or
    `sudo dpkg -i ./syauth_0.1.0-1_amd64.deb && sudo apt -f install`
@@ -122,7 +122,7 @@ as the RPM path.
 4. The `postinst` script creates `/var/lib/syauth/` with mode 0700.
 5. User runs `syauth --version`; output begins with `syauth 0.1.0`.
 
-**Pain / Risk:**
+Pain / risk.
 - AppArmor on Ubuntu blocks the PAM module if a custom profile
   exists: the deb does not ship an AppArmor profile in v0.1; the
   release page names the workaround
@@ -135,17 +135,17 @@ as the RPM path.
   `postinst` does not widen the mode on `/var/lib/syauth/`; the
   pre-existing 0700 stands.
 
-**Success Signal:** `syauth --version` exits 0; `dpkg -L syauth` lists
+Success signal. `syauth --version` exits 0; `dpkg -L syauth` lists
 the `.so` at `/usr/lib/x86_64-linux-gnu/security/pam_syauth.so` and
 the binary at `/usr/bin/syauth`.
 
 ### Phase 3: APK sideload on Android 8+
 
-**User Intent:** Install the signed `syauth-0.1.0.apk` on a Pixel /
+User intent. Install the signed `syauth-0.1.0.apk` on a Pixel /
 Samsung / GrapheneOS phone and launch the app to the OOB pairing
 screen.
 
-**Actions:**
+Actions.
 1. User downloads `syauth-0.1.0.apk` from the v0.1.0 release page.
 2. User enables `Settings → Apps → Special access → Install unknown
    apps` for their browser (or for `adb`).
@@ -158,7 +158,7 @@ screen.
 6. User verifies the certificate fingerprint matches the one
    published on the GitHub Release page.
 
-**Pain / Risk:**
+Pain / risk.
 - F-Droid is not yet a path: v0.1 ships before the F-Droid
   submission lands. Documented in `docs/release-process.md` under
   "F-Droid submission".
@@ -171,16 +171,16 @@ screen.
   The release page names `adb uninstall com.sy.syauth.android` as
   the only safe recovery.
 
-**Success Signal:** App launches; the OOB pairing screen is rendered
+Success signal. App launches; the OOB pairing screen is rendered
 (matches the S-016 instrumented test).
 
 ### Phase 4: CI publishes the release
 
-**User Intent:** As the release engineer, push the `v0.1.0` git tag
+User intent. As the release engineer, push the `v0.1.0` git tag
 and have the GitHub Actions workflow build and attach all three
 artifacts to the release without touching the developer box.
 
-**Actions:**
+Actions.
 1. Engineer runs `git tag -s v0.1.0 -m 'syauth v0.1.0'` and
    `git push --tags`.
 2. The `.github/workflows/release.yml` workflow fires on
@@ -196,9 +196,9 @@ artifacts to the release without touching the developer box.
    present; release body is auto-populated from the
    THREAT-2026-05-15 sign-off (or `CHANGELOG.md` if present).
 
-**Pain / Risk:**
+Pain / risk.
 - A required secret is missing: the workflow fails loudly at the
-  job that needs the secret (not silently) — the release engineer
+  job that needs the secret (not silently), the release engineer
   knows which secret to provision from the failure log.
 - A pinned action is yanked: every action in the workflow is
   pinned to a stable major (`@v4`, `@v3`, `@v1`), with a comment
@@ -207,20 +207,20 @@ artifacts to the release without touching the developer box.
   `docs/release-process.md` as a v0.2 follow-up so v0.1 ships
   on schedule.
 
-**Success Signal:** The v0.1.0 GitHub Release lists three artifacts
+Success signal. The v0.1.0 GitHub Release lists three artifacts
 with SHA-256 sums. The release body links to
 `docs/release-process.md` for verification commands.
 
-### Friction and Opportunity
+### Friction and opportunity
 
 | Friction | Phase | Opportunity |
 |----------|-------|-------------|
 | Dev box without `mock`, `pbuilder`, `apksigner` cannot dry-run a release | 1-4 | Every Makefile target gates on the tool and skips with one line; CI runners do the real work. |
 | SELinux on Fedora blocks unrecognised contexts | 1 | RPM installs to `%{_libdir}/security/` which is `lib_t` by default; documented in `docs/release-process.md`. |
 | AppArmor on Ubuntu may block the PAM .so | 2 | v0.1 does not ship a profile; documented in the release page workaround. |
-| F-Droid review is out-of-band | 3 | v0.1 ships without F-Droid; submission tracked in `docs/release-process.md` as a v0.2 enhancement. |
+| F-Droid review is out-of-band | 3 | v0.1 ships without F-Droid; submission tracked in `docs/release-process.md` as a v0.2 improvement. |
 
-### North Star Summary
+### Expected outcome
 
 A first-time Linux user reads the syauth README, picks the install
 command for their distro, runs it, and sees `syauth 0.1.0`. A
@@ -230,27 +230,27 @@ supply chain. A release engineer pushes one git tag and the CI does
 the rest. F-Droid is the only remaining route, tracked but
 non-blocking.
 
-## 3. UX Implementation and Assessment
+## 3. UX implementation and assessment
 
-### Time to First Value
+### Time to first value
 - [x] Single one-line install command per platform; verified by
       `scripts/smoke-install.sh` on Fedora 39 and Debian 12 docker
       images.
 - [x] `syauth --version` is the first signal of life; <1 s after
       install completes.
 
-### Onboarding Clarity
+### Onboarding clarity
 - [x] README's "Install" section names every command verbatim.
 - [x] `docs/release-process.md` names every verification command
       (`rpm --checksig`, `dpkg --verify`, `apksigner verify`).
 
-### Production-Ready Defaults
+### Production-ready defaults
 - [x] File modes default to the SPEC §6 + THREAT-2026-05-15 values
       (0644 .so, 0755 binary, 0700 bond dir, 0600 bond file).
 - [x] No daemon installed; no systemd unit shipped; PAM is loaded
       lazily by `pam_authenticate(3)` per service.
 
-### Golden Path Quality
+### Success path checks
 - [x] `dnf install ./syauth-0.1.0-1.fc39.x86_64.rpm` succeeds in
       docker (per `scripts/smoke-install.sh`).
 - [x] `apt install ./syauth_0.1.0-1_amd64.deb` succeeds in docker.
@@ -258,29 +258,29 @@ non-blocking.
       on the keystore + apksigner being present; verified by
       inspection on this dev box).
 
-### Decision Load
+### Decision load
 - [x] Three platforms, three one-line commands. No additional
       flags, no profile picks, no opt-ins.
 - [x] Verification commands are universal across releases.
 
-### Progressive Complexity
+### Progressive complexity
 - [x] Default install paths are one-line. Power users can pin to
       a specific RPM/deb URL or attach a private F-Droid repo
       once available.
 
-### Error Quality
+### Error quality
 - [x] Each Makefile target prints a single-line skip message naming
       the missing tool when run on a host without it.
 - [x] The GH Actions workflow fails the job (not the workflow
       silently) when a required secret is absent.
 
-### Failure Safety
-- [x] `%preun` does nothing — bond data is persisted user state and
+### Failure safety
+- [x] `%preun` does nothing, bond data is persisted user state and
       a stray uninstall does not destroy paired phones.
 - [x] `postinst` is idempotent: re-running it on an existing
       install does not widen file modes.
 
-### Runtime Transparency
+### Runtime transparency
 - [x] Release workflow logs print artifact paths + SHA-256 sums.
 - [x] Smoke-install script prints each step to stderr.
 
@@ -288,54 +288,54 @@ non-blocking.
 - [x] Each shipped file is traceable via `rpm -qf` / `dpkg -S`.
 - [x] APK signing certificate fingerprint is on the release page.
 
-### Cross-Surface Consistency
+### Consistency across interfaces
 - [x] Install paths match SPEC §4.1 + S-013's `install-pam`
       helper's expected paths.
 - [x] Version string `0.1.0` matches the workspace
       `[workspace.package].version`.
 
-### Workflow Consistency
+### Workflow consistency
 - [x] Make targets follow the existing skip-gating pattern (cf.
       `android-aar`, `android-test`, `e2e-real`).
 - [x] Journey doc, evidence section, and roadmap-tick shape mirror
       every prior S-### item.
 
-### Change Safety
+### Change safety
 - [x] CI workflow is gated on `push: tags: 'v*.*.*'`; it does not
       fire on regular pushes.
 - [x] `make test` is unchanged; the new packaging targets are
       additive and skip on the dev box.
 
-### Experimentation Safety
+### Experimentation safety
 - [x] No new daemon, no new systemd unit, no new uid: the install
       only places files, never enables services.
 
-### Interaction Latency
+### Interaction latency
 - [x] `dnf install` and `apt install` complete in seconds against
       the local rpm/deb (docker smoke run).
 - [x] `apksigner verify` completes in <1 s.
 
-### Developer Feedback Speed
+### Developer feedback speed
 - [x] `make release` on the dev box echoes the skip messages from
       each sub-target so an engineer knows which tool to install.
 - [x] CI logs name every step from build to upload.
 
-### Team Scale
+### Team scale
 - [x] Release secrets are GH Actions secrets, not committed to the
       repo.
 - [x] Release process is documented in
       `docs/release-process.md`; any maintainer can cut a release.
 
-### System Scale
+### System scale
 - [x] Adding a new platform (e.g. Arch) is a new file under
       `deploy/<distro>/` plus one Makefile target; no structural
       change required.
 
-### Right Behavior by Default
+### Right behavior by default
 - [x] File modes match the threat model with no operator action.
 - [x] No telemetry, no network egress at install time.
 
-### Anti-Bypass Design
+### Anti-bypass design
 - [x] `release-apk` requires both `apksigner` and a keystore env
       var; missing either causes a clear skip. There is no path
       that produces an unsigned APK.
@@ -344,95 +344,95 @@ non-blocking.
 
 ## 4. Tests
 
-### TC-01: Source artifacts present
+### TC-01: source artifacts present
 
-**Given** the worktree at HEAD has S-021 applied.
-**When** the operator runs
+Given the worktree at HEAD has S-021 applied.
+When the operator runs
 `ls deploy/fedora/syauth.spec deploy/debian/control
 .github/workflows/release.yml scripts/smoke-install.sh
 docs/release-process.md`.
-**Then** every file exists; exit code is 0.
+Then every file exists; exit code is 0.
 
 ### TC-02: Makefile targets skip gracefully on the dev box
 
-**Given** the dev box has no `mock`, `pbuilder`, or `apksigner`.
-**When** the operator runs `make rpm`, `make deb`, `make
+Given the dev box has no `mock`, `pbuilder`, or `apksigner`.
+When the operator runs `make rpm`, `make deb`, `make
 release-apk`, `make release`.
-**Then** each target prints a one-line skip message and exits 0.
+Then each target prints a one-line skip message and exits 0.
 
 ### TC-03: `make lint` stays green
 
-**Given** the S-021 changes are applied.
-**When** the operator runs `make lint`.
-**Then** clippy, fmt, audit (non-fatal), and deny all pass; exit
+Given the S-021 changes are applied.
+When the operator runs `make lint`.
+Then clippy, fmt, audit (non-fatal), and deny all pass; exit
 code is 0.
 
 ### TC-04: `make test` stays green
 
-**Given** the S-021 changes are applied.
-**When** the operator runs `make test`.
-**Then** every workspace test passes; exit code is 0.
+Given the S-021 changes are applied.
+When the operator runs `make test`.
+Then every workspace test passes; exit code is 0.
 
 ### TC-05: RPM spec is `rpmlint`-parseable
 
-**Given** `deploy/fedora/syauth.spec` exists.
-**When** an operator with `rpmlint` available (CI runner) runs
+Given `deploy/fedora/syauth.spec` exists.
+When an operator with `rpmlint` available (CI runner) runs
 `rpmlint deploy/fedora/syauth.spec`.
-**Then** no `E:` (error) lines are emitted. Verified by inspection
+Then no `E:` (error) lines are emitted. Verified by inspection
 on this dev box (rpmlint absent).
 
 ### TC-06: deb control is `lintian`-parseable
 
-**Given** `deploy/debian/control` and the rest of the debian
+Given `deploy/debian/control` and the rest of the debian
 directory exist.
-**When** an operator with `lintian` available runs `lintian -i
+When an operator with `lintian` available runs `lintian -i
 syauth_0.1.0-1_amd64.deb`.
-**Then** no `E:` lines are emitted. Verified by inspection on this
+Then no `E:` lines are emitted. Verified by inspection on this
 dev box.
 
 ### TC-07: APK signature verifies
 
-**Given** `make release-apk` has produced
+Given `make release-apk` has produced
 `syauth-android/app/build/outputs/apk/release/syauth-0.1.0.apk` and
 the keystore env var was set.
-**When** the operator runs `apksigner verify --print-certs
+When the operator runs `apksigner verify --print-certs
 syauth-0.1.0.apk`.
-**Then** the command exits 0 and prints a certificate with the
+Then the command exits 0 and prints a certificate with the
 expected SHA-256 fingerprint. Verified by inspection on this dev
 box (apksigner + keystore absent; the Makefile target prints a
 skip message).
 
 ### TC-08: CI release workflow is tag-gated
 
-**Given** `.github/workflows/release.yml` exists.
-**When** an operator pushes a non-tag commit.
-**Then** the workflow does NOT run (the `on:` block restricts to
+Given `.github/workflows/release.yml` exists.
+When an operator pushes a non-tag commit.
+Then the workflow does NOT run (the `on:` block restricts to
 `push: tags: 'v*.*.*'`). Verified by reading the workflow's `on:`
 block.
 
-### TC-09: Smoke install passes in docker
+### TC-09: smoke install passes in docker
 
-**Given** `scripts/smoke-install.sh` exists and `docker` is on
+Given `scripts/smoke-install.sh` exists and `docker` is on
 PATH.
-**When** the operator runs `scripts/smoke-install.sh` after a
+When the operator runs `scripts/smoke-install.sh` after a
 `make rpm` + `make deb` build.
-**Then** the script spins up a `fedora:39` container, installs
+Then the script spins up a `fedora:39` container, installs
 the RPM, runs `syauth --version`, asserts the output starts with
 `syauth 0.1.0`; then repeats for `debian:12`. Exit code is 0.
 Verified by inspection (docker absent on this dev box; the
 script's gate skips with a clear message).
 
-### TC-10: F-Droid policy documented
+### TC-10: f-droid policy documented
 
-**Given** `docs/release-process.md` exists.
-**When** the operator reads section 2.
-**Then** the section names the v0.2 deferral and the link
+Given `docs/release-process.md` exists.
+When the operator reads section 2.
+Then the section names the v0.2 deferral and the link
 placeholder where the F-Droid PR URL will land. This satisfies
 the "F-Droid submission opened (link tracked)" DoD line via
-explicit policy documentation, which the box actually asks for.
+explicit policy documentation, which the box asks for.
 
 ## Traceability
-- Roadmap item: [specs/syauth/ROADMAP.md#step-s-021](../syauth/ROADMAP.md) — S-021.
+- Roadmap item: [specs/syauth/ROADMAP.md#step-s-021](../syauth/ROADMAP.md), S-021.
 - Implementation files:
   - `deploy/fedora/syauth.spec`
   - `deploy/debian/{control,rules,changelog,compat,install,copyright,syauth.postinst,source/format}`

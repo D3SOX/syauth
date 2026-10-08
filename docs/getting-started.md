@@ -20,15 +20,15 @@ cd syauth
 cargo build --release --locked -p syauth-cli -p syauth-pam -p syauth-presenced
 ```
 
-Run the following from a terminal in your local KDE session. `pkexec` displays
-KDE's administrator authentication dialog. Substitute your login name for
+Run the following from a terminal in your local KDE session. `sudo` requests
+administrator authentication in that terminal. Substitute your login name for
 `LOCAL_USER`; do not run the daemon as root.
 
 ```sh
-pkexec install -Dm644 target/release/libpam_syauth.so /usr/lib/security/pam_syauth.so
-pkexec install -Dm755 target/release/syauth /usr/local/bin/syauth
-pkexec install -Dm755 target/release/syauth-presenced /usr/local/libexec/syauth-presenced
-pkexec install -d -m700 -o LOCAL_USER -g LOCAL_USER /var/lib/syauth /var/lib/syauth/keys /var/log/syauth
+sudo install -Dm644 target/release/libpam_syauth.so /usr/lib/security/pam_syauth.so
+sudo install -Dm755 target/release/syauth /usr/local/bin/syauth
+sudo install -Dm755 target/release/syauth-presenced /usr/local/libexec/syauth-presenced
+sudo install -d -m700 -o LOCAL_USER -g LOCAL_USER /var/lib/syauth /var/lib/syauth/keys /var/log/syauth
 install -Dm644 crates/syauth-presenced/dist/syauth-presenced.service \
   ~/.config/systemd/user/syauth-presenced.service
 mkdir -p ~/.config/systemd/user/syauth-presenced.service.d
@@ -48,7 +48,7 @@ from the earlier README instructions was incorrect for this installation.
 
 ## Build and install Android
 
-Gradle needs the native AAR **and** generated Kotlin bindings first. A plain
+Gradle needs the native AAR and generated Kotlin bindings first. A plain
 `assembleDebug` on a fresh checkout does not create these inputs.
 
 ```sh
@@ -118,7 +118,7 @@ systemctl --user stop syauth-presenced
 syauth pair --timeout-secs 300
 ```
 
-1. On the phone, select **Pair** / **Pair with computer** and choose **syauth**
+1. On the phone, select Pair / Pair with computer and choose syauth
    in Android's device picker (it may use this advertisement name rather than
    your laptop hostname).
 2. Compare the six-digit Bluetooth code on both devices and approve only a match.
@@ -126,7 +126,7 @@ syauth pair --timeout-secs 300
 3. Compare the four-word app confirmation on both devices and confirm the match
    in the phone app and desktop terminal. These are a separate confirmation from
    the system Bluetooth dialog.
-4. Tap **Done**. Home now shows the new bond and starts the companion service
+4. Tap Done. Home now shows the new bond and starts the companion service
    immediately. Restarting the Android app is no longer required.
 5. Run `syauth list` to confirm the desktop record exists.
 
@@ -134,7 +134,7 @@ If pairing fails, inspect Bluetooth settings on both devices for stale bonds
 before retrying. Only remove the intended phone/computer pairing. Do not reset
 Bluetooth or remove unrelated devices.
 
-Optionally configure the daemon to reconnect **only the phone** on restart. Use
+Optionally configure the daemon to reconnect only the phone on restart. Use
 the phone identity address shown by `bluetoothctl devices Paired`, not an unrelated
 headset address or the desktop peer ID from `syauth list`:
 

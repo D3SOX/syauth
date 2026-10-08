@@ -1,23 +1,22 @@
 # JOURNEY-S-009: `syauth install-presenced` + retire short-burst advertise
 
-> **Spec anchors:** `specs/unlock-proximity/SPEC.md` §3 Scope item #9
+> Spec anchors. `specs/unlock-proximity/SPEC.md` §3 Scope item #9
 > ("systemd user unit: `crates/syauth-presenced/dist/syauth-presenced.service`,
 > installed by `syauth install-presenced` (new subcommand) with
 > `WantedBy=default.target`."); §4 Migration & Compatibility (the
 > long-lived daemon replaces the per-PAM-call advertise burst); §3
-> Decisions row "Daemon process model" (per-user, not system —
-> install lives in `~/.config/systemd/user/`).
+> Decisions row "Daemon process model" (per-user, not system, > install lives in `~/.config/systemd/user/`).
 >
-> **Roadmap row:** `specs/unlock-proximity/ROADMAP.md` Step S-009.
+> Roadmap row. `specs/unlock-proximity/ROADMAP.md` Step S-009.
 >
-> **Closure condition (verbatim from ROADMAP.md):**
+> Closure condition (verbatim from ROADMAP.md).
 >
 > ```
 > cargo test -p syauth-cli --test install_presenced_flow
 > git grep -n "fn connect" crates/syauth-transport/src/bluez_advertise.rs   # empty
 > ```
 
-## Roadmap Link
+## Roadmap link
 - Source roadmap: [specs/unlock-proximity/ROADMAP.md](../unlock-proximity/ROADMAP.md) Step S-009.
 - Feature: add the `install-presenced` subcommand to `syauth-cli`
   (mirrors `install-pam`): copies the daemon binary to
@@ -32,19 +31,19 @@
 
 ## 1. Journey
 
-When **a Linux operator who has just paired their phone with the
+When a Linux operator who has just paired their phone with the
 `syauth` desktop (S-013 install-pam done) and wants the long-lived
 presence daemon (S-001..S-008) to start up on every login without
-hand-editing systemd units**, I want to **run a single
+hand-editing systemd units, I want to run a single
 `syauth install-presenced` (or accept the default
 `syauth install-pam --with-presenced=true` bundle) that drops the
 daemon binary into a predictable `/usr/local/libexec/` slot, writes
-the canonical systemd user unit under `~/.config/systemd/user/`,
-reloads systemd, and enables + starts the unit** so I can **walk
+the specified systemd user unit under `~/.config/systemd/user/`,
+reloads systemd, and enables + starts the unit so I can walk
 away with a daemon that survives reboot, restarts on crash, and
-honors the SPEC §3 Decisions row "Daemon process model" — per-user,
-not system — without ever having touched `/etc/systemd/system/`
-or run anything as root**.
+honors the SPEC §3 Decisions row "Daemon process model", per-user,
+not system, without ever having touched `/etc/systemd/system/`
+or run anything as root.
 
 ## 2. CJM
 
@@ -59,12 +58,12 @@ step is a chance to mis-spell the `ExecStart` path, drop the unit
 into the system-wide tree (where `--user` cannot reach it), or
 forget the `daemon-reload`. S-009 removes that entire ritual.
 
-### Phase 1: Install — bundle the daemon binary + unit + systemd reload
+### Phase 1: install, bundle the daemon binary + unit + systemd reload
 
-**User Intent:** Make `syauth-presenced` a real, restart-safe,
+User intent. Make `syauth-presenced` a real, restart-safe,
 per-user systemd service in one CLI call.
 
-**Actions:**
+Actions.
 1. Build the workspace (`cargo build --release`) so
    `target/release/syauth-presenced` exists.
 2. Run `syauth install-presenced --from
@@ -77,7 +76,7 @@ per-user systemd service in one CLI call.
    `systemctl --user daemon-reload` and
    `systemctl --user enable --now syauth-presenced.service` run.
 
-**Pain / Risk:**
+Pain / risk.
 1. Operator forgets the `--from` flag and the auto-detect picks the
    wrong binary (e.g. an in-tree `target/debug` artifact).
 2. `XDG_CONFIG_HOME` is unset and the fallback to `~/.config/` mis-
@@ -85,25 +84,25 @@ per-user systemd service in one CLI call.
 3. `systemctl` is missing (CI container without systemd) and the
    `enable --now` call fails opaquely.
 
-**Success Signal:** `systemctl --user is-active syauth-presenced`
+Success signal. `systemctl --user is-active syauth-presenced`
 prints `active`; `journalctl --user -t syauth-presenced -f` shows
 the daemon's startup banner.
 
-### Phase 2: Dry-run / test — let CI exercise the installer without `systemctl`
+### Phase 2: dry-run / test, let CI exercise the installer without `systemctl`
 
-**User Intent:** Run the installer hermetically — in a tempdir, with
-no real systemd — so the CI gate at `make test` covers it.
+User intent. Run the installer hermetically, in a tempdir, with
+no real systemd, so the CI gate at `make test` covers it.
 
-**Actions:**
+Actions.
 1. Pass `--dry-run --unit-dir <tempdir> --from <fake-binary>`.
 2. Read stdout: lines like `would-run: systemctl --user
    daemon-reload` and `would-run: systemctl --user enable --now
    syauth-presenced.service` appear instead of real shell-outs.
-3. Inspect `<tempdir>/syauth-presenced.service` — the file is
+3. Inspect `<tempdir>/syauth-presenced.service`, the file is
    present, mode-readable, and contains `ExecStart=<--from path>`.
 
-**Pain / Risk:**
-1. The dry-run path drifts from the live path — i.e. the unit text
+Pain / risk.
+1. The dry-run path drifts from the live path, i.e. the unit text
    the operator sees in dry-run is not byte-identical to the unit
    the live path writes.
 2. The `--unit-dir` override is too narrow (only covers the unit
@@ -112,28 +111,28 @@ no real systemd — so the CI gate at `make test` covers it.
 3. The test fixture binary is not mode-executable; the installer
    refuses to copy it, hiding a real-world success path.
 
-**Success Signal:**
+Success signal.
 `cargo test -p syauth-cli --test install_presenced_flow` passes;
 the assertion reads back the unit file's `ExecStart=` line and
 matches the `--from` path; stdout contains both `would-run:` lines.
 
-### Phase 3: Bundle — `install-pam` calls `install-presenced` by default
+### Phase 3: bundle, `install-pam` calls `install-presenced` by default
 
-**User Intent:** Treat S-009 as the missing companion to S-013, so
+User intent. Treat S-009 as the missing companion to S-013, so
 `syauth install-pam` does the right thing without a second
 invocation.
 
-**Actions:**
-1. Run `syauth install-pam --service sudo` (no flags) — both the
+Actions.
+1. Run `syauth install-pam --service sudo` (no flags), both the
    PAM service file edit AND the presenced install fire.
 2. Run `syauth install-pam --service sudo --with-presenced=false`
    when the operator wants only the PAM line (e.g. they manage the
    daemon via their distro's systemd unit).
-3. Both invocations are idempotent — second run is byte-identical.
+3. Both invocations are idempotent, second run is byte-identical.
 
-**Pain / Risk:**
+Pain / risk.
 1. The bundled `install-presenced` step fails (no systemctl, dry-
-   run was meant) but the PAM edit already happened — partial
+   run was meant) but the PAM edit already happened, partial
    state.
 2. The operator passes `--with-presenced=false` once, then forgets
    the daemon was never installed; PAM falls through to
@@ -142,17 +141,17 @@ invocation.
    `install-presenced` so the test harness can drive both without
    shelling out.
 
-**Success Signal:** `syauth install-pam` exits 0; `systemctl
+Success signal. `syauth install-pam` exits 0; `systemctl
 --user is-active syauth-presenced` is `active`; a subsequent run of
 `syauth install-pam` reports both the AlreadyInstalled PAM line
 and the unit-already-present presenced state.
 
-### Phase 4: Retire the per-PAM-call advertise burst
+### Phase 4: retire the per-pam-call advertise burst
 
-**User Intent:** Delete the dead code path so the long-lived
-`PersistentPeripheral` is the only advertise surface.
+User intent. Delete the dead code path so the long-lived
+`PersistentPeripheral` is the only advertising implementation.
 
-**Actions:**
+Actions.
 1. Confirm `git grep -n "BluerAdvertiser::connect\|BluerAdvertiseSession"
    crates/` is empty after S-008.
 2. Delete `BluerAdvertiser::connect` (and `connect_inner`),
@@ -162,7 +161,7 @@ and the unit-already-present presenced state.
    `ADVERTISE_CONNECTABLE` constants that only the burst path
    referenced.
 3. Keep `BluerAdvertiser::new_sync`, `rotating_uuid_for`,
-   `current_minute_from`, `build_unlock_services` — S-003's
+   `current_minute_from`, `build_unlock_services`, S-003's
    `PersistentPeripheral` still reuses these.
 4. Delete the `connect_rejects_when_not_paired` unit test (it
    exercises the deleted path); keep `new_sync_records_inputs`,
@@ -171,9 +170,9 @@ and the unit-already-present presenced state.
    `rotating_uuid_for_matches_free_function`, the per-minute
    rotation test, and the bond-key-dependence test.
 
-**Pain / Risk:**
+Pain / risk.
 1. A test in another crate still pulls the burst path through a
-   `BtPeer` dyn cast — silent compile-fail surfaces only at
+   `BtPeer` dyn cast, silent compile-fail surfaces only at
    `make test`.
 2. The pruned constants (`ADVERTISE_LOCAL_NAME`,
    `ADVERTISE_READ_BUFFER_BYTES`) are re-exported from
@@ -182,166 +181,163 @@ and the unit-already-present presenced state.
 3. The `PersistentPeripheral` from S-003 silently regressed and
    nobody noticed because the burst was masking it.
 
-**Success Signal:** `git grep -n "fn connect"
+Success signal. `git grep -n "fn connect"
 crates/syauth-transport/src/bluez_advertise.rs` returns empty;
 `cargo test -p syauth-transport` is green;
 `cargo test -p syauth-presenced` and `cargo test -p syauth-pam`
 unchanged.
 
-### Friction and Opportunity
+### Friction and opportunity
 
 | Friction | Phase | Opportunity |
 |----------|-------|-------------|
-| Operator has to hand-edit a systemd user unit. | Phase 1 | One-shot `install-presenced` writes the canonical unit + reloads systemd. |
+| Operator has to hand-edit a systemd user unit. | Phase 1 | One-shot `install-presenced` writes the specified unit + reloads systemd. |
 | CI cannot exercise the installer because no real systemctl in the container. | Phase 2 | `--dry-run --unit-dir <tempdir>` flag set; stdout `would-run:` lines pin the call sequence. |
 | Two-step `install-pam` then `install-presenced` is easy to forget. | Phase 3 | `--with-presenced=true` default bundles the two. |
-| Dead `BluerAdvertiser::connect` path lingers and confuses future readers. | Phase 4 | Delete the burst surface; `PersistentPeripheral` is the only advertise path. |
+| Dead `BluerAdvertiser::connect` path lingers and confuses future readers. | Phase 4 | Delete the burst advertising implementation; `PersistentPeripheral` is the only advertise path. |
 
-### North Star Summary
+### Expected outcome
 
-A fresh-paired operator runs `syauth install-pam --service sudo`
-once. The PAM service file is atomically edited (S-013), the daemon
-binary is copied to `/usr/local/libexec/syauth-presenced`, the
-systemd user unit is written to
-`~/.config/systemd/user/syauth-presenced.service`,
-`systemctl --user daemon-reload && enable --now` fires, and the
-operator's next reboot leaves the daemon running. The radio-side
-advertise path is owned exclusively by S-003's
-`PersistentPeripheral`; the legacy per-PAM-call burst is gone from
-the repository.
+After pairing, the operator runs `syauth install-pam --service sudo`.
+The installer edits the PAM service file atomically, as specified in S-013.
+It copies the daemon to `/usr/local/libexec/syauth-presenced` and writes
+`~/.config/systemd/user/syauth-presenced.service`. It runs
+`systemctl --user daemon-reload && enable --now`, so the daemon also starts
+after reboot. S-003's `PersistentPeripheral` owns advertising; the legacy
+per-PAM-call advertising implementation is removed.
 
-## 3. UX Implementation and Assessment
 
-### Time to First Value
+## 3. UX implementation and assessment
+
+### Time to first value
 - [x] One CLI call (`syauth install-pam` with default
       `--with-presenced=true`) takes the operator from "binary
       built" to "daemon enabled on boot".
-- [x] No editor / no `chmod` / no `systemctl edit` — the installer
+- [x] No editor / no `chmod` / no `systemctl edit`, the installer
       handles the lot.
 
-### Onboarding Clarity
+### Onboarding clarity
 - [x] `syauth install-presenced --help` snapshot-pinned; flags self-
       document.
 - [x] `--dry-run` exposes exactly what the live path would do, so
       operators can preview before approving.
 
-### Production-Ready Defaults
-- [x] `--with-presenced=true` is the default — the bundle is the
-      golden path.
+### Production-ready defaults
+- [x] `--with-presenced=true` is the default, the bundle is the
+      success path.
 - [x] `/usr/local/libexec/syauth-presenced` is the SPEC §3 anchor
       and is named via a constant (`DEFAULT_DAEMON_BIN_PATH`).
 
-### Golden Path Quality
+### Success path checks
 - [x] Live path: copy binary → write unit → `daemon-reload` →
       `enable --now`.
 - [x] Dry-run path writes the unit and prints `would-run:` lines
       for the two `systemctl` invocations.
 
-### Decision Load
+### Decision load
 - [x] Only one decision the operator must make: opt out of the
       bundle (`--with-presenced=false`).
 - [x] Source binary location auto-detects via `current_exe()`
       sibling search when `--from` is omitted.
 
-### Progressive Complexity
-- [x] Simple case (just-paired operator) stays simple — one CLI
+### Progressive complexity
+- [x] Simple case (just-paired operator) stays simple, one CLI
       call.
 - [x] Advanced overrides (`--from`, `--unit-dir`, `--dry-run`) are
       opt-in.
 
-### Error Quality
+### Error quality
 - [x] Missing source binary surfaces as a typed
       `InstallPresencedError::SourceMissing`.
 - [x] Failed `systemctl` call surfaces the exit code + stderr.
 
-### Failure Safety
+### Failure safety
 - [x] `--dry-run` is the recovery escape hatch: preview before live
       run.
 - [x] Re-running the installer is idempotent (the unit file is
       overwritten with byte-identical content; `enable --now` is
       a no-op on an already-enabled unit).
 
-### Runtime Transparency
+### Runtime transparency
 - [x] Stdout names every artifact written.
 - [x] `journalctl --user -t syauth-presenced -f` is the operator's
       log view.
 
 ### Debuggability
-- [x] `--dry-run` stdout is the audit trail — every `would-run:`
+- [x] `--dry-run` stdout is the audit trail, every `would-run:`
       line shows the exact command that would have fired.
 - [x] Unit file is plain text on disk; operators can diff against
       the bundled `dist/syauth-presenced.service`.
 
-### Cross-Surface Consistency
+### Consistency across interfaces
 - [x] The unit file is sourced via `include_str!` from
       `crates/syauth-presenced/dist/syauth-presenced.service`; the
       same bytes the package ships are the bytes the installer
       writes.
 - [x] Help-text terminology mirrors `install-pam`.
 
-### Workflow Consistency
+### Workflow consistency
 - [x] `install-presenced` mirrors `install-pam`'s flag style
       (`--service`, `--pam-dir`, `--yes`) → (`--from`, `--unit-dir`,
       `--dry-run`).
 - [x] Both subcommands return typed `*Outcome` enums; the CLI
       dispatch prints a one-liner per variant.
 
-### Change Safety
+### Change safety
 - [x] `--dry-run` is the preview before live.
-- [x] The installer overwrites the unit file in place — operator
+- [x] The installer overwrites the unit file in place, operator
       drop-ins under
       `~/.config/systemd/user/syauth-presenced.service.d/` are
       preserved (systemd loads them on next `daemon-reload`).
 
-### Experimentation Safety
+### Experimentation safety
 - [x] `--unit-dir <tempdir>` makes the installer hermetic;
       `--dry-run` skips all shell-outs.
 - [x] CI exercises both via `tests/install_presenced_flow.rs`.
 
-### Interaction Latency
+### Interaction latency
 - [x] Live path: one `fs::copy`, one `fs::write`, two `systemctl`
       calls. Sub-second.
 - [x] Dry-run path: one `fs::write` + two `println!`. Instant.
 
-### Developer Feedback Speed
+### Developer feedback speed
 - [x] Failing test names the missing assertion in one line.
 - [x] Snapshot drift surfaces as a `cargo insta` diff.
 
-### Team Scale
+### Team scale
 - [x] The unit file is version-controlled at
       `crates/syauth-presenced/dist/syauth-presenced.service`;
       every install on every machine writes the same bytes.
 
-### System Scale
+### System scale
 - [x] Per-user installation means a multi-user host gets N
       independent daemons (one per logged-in user), each with its
-      own `XDG_RUNTIME_DIR` socket — no privilege coupling.
+      own `XDG_RUNTIME_DIR` socket, no privilege coupling.
 
-### Right Behavior by Default
+### Right behavior by default
 - [x] `--with-presenced=true` is the default.
 - [x] Auto-detect picks the sibling `syauth-presenced` next to the
       currently-running `syauth` binary.
 
-### Anti-Bypass Design
+### Anti-bypass design
 - [x] No `--skip-systemctl` knob in live mode; if the operator does
       not want the systemctl side effects they ask for `--dry-run`
       (which then writes a tempdir file and prints `would-run:`
       lines).
-- [x] The unit-file bytes are `include_str!`'d at compile time —
-      the installer cannot ship a unit that diverges from the
+- [x] The unit-file bytes are `include_str!`'d at compile time,       the installer cannot ship a unit that diverges from the
       bundled `dist/` copy.
 
 ## 4. Tests
 
 ### TC-01: `install_writes_unit_and_starts_service`
 
-**Given** a tempdir for `--unit-dir`, a touched-but-empty file at
+Given a tempdir for `--unit-dir`, a touched-but-empty file at
 `<tempdir>/fake-daemon-binary` to stand in for the daemon source.
 
-**When** the operator runs `syauth install-presenced --dry-run
+When the operator runs `syauth install-presenced --dry-run
 --unit-dir <tempdir> --from <tempdir>/fake-daemon-binary`.
 
-**Then** the unit file appears at
+Then the unit file appears at
 `<tempdir>/syauth-presenced.service`, is mode-readable, contains
 `ExecStart=<--from path>`, and stdout includes both `would-run:
 systemctl --user daemon-reload` and `would-run: systemctl --user
@@ -349,22 +345,22 @@ enable --now syauth-presenced.service`.
 
 ### TC-02: `install-presenced --help` snapshot
 
-**Given** the built `syauth` binary.
+Given the built `syauth` binary.
 
-**When** the test runs `syauth install-presenced --help` via
+When the test runs `syauth install-presenced --help` via
 `assert_cmd::Command`.
 
-**Then** stdout matches the committed snapshot
+Then stdout matches the committed snapshot
 `tests/snapshots/cli__install_presenced_help_snapshot.snap`.
 
 ### TC-03: `BluerAdvertiser::connect` deletion
 
-**Given** S-008 has retired the only caller of the burst path.
+Given S-008 has retired the only caller of the burst path.
 
-**When** `git grep -n "fn connect"
+When `git grep -n "fn connect"
 crates/syauth-transport/src/bluez_advertise.rs` is run.
 
-**Then** the result is empty;
+Then the result is empty;
 `cargo test -p syauth-transport` is green.
 
 ## Traceability
@@ -387,7 +383,7 @@ crates/syauth-transport/src/bluez_advertise.rs` is run.
 ## Implementation
 
 ### Files created
-- `crates/syauth-cli/src/install_presenced.rs` — the new module that
+- `crates/syauth-cli/src/install_presenced.rs`, the new module that
   owns `InstallPresencedOpts`, `InstallPresencedOutcome`,
   `InstallPresencedError`, and the `install_presenced` driver, plus
   the named constants (`DEFAULT_DAEMON_BIN_PATH`,
@@ -397,35 +393,35 @@ crates/syauth-transport/src/bluez_advertise.rs` is run.
   `WOULD_RUN_PREFIX`) and the unit-tested helpers
   `resolve_unit_dir`, `resolve_source_binary`, `atomic_write_text`,
   `rewrite_exec_start`, `run_systemctl`.
-- `crates/syauth-cli/tests/install_presenced_flow.rs` — the
+- `crates/syauth-cli/tests/install_presenced_flow.rs`, the
   hermetic integration test (TC-01: `install_writes_unit_and_starts_service`)
   that drives `syauth install-presenced --dry-run --unit-dir
   <tempdir> --from <fake>` and asserts the unit file, `ExecStart=`
   rewriting, and both `would-run:` stdout lines.
-- `crates/syauth-cli/tests/snapshots/cli__install_presenced_help_snapshot.snap`
-  — the help-text snapshot for `syauth install-presenced --help`.
+- `crates/syauth-cli/tests/snapshots/cli__install_presenced_help_snapshot.snap`,
+the help-text snapshot for `syauth install-presenced --help`.
 
 ### Files modified
-- `crates/syauth-cli/src/lib.rs` — wires the new `install_presenced`
-  module into the library surface.
-- `crates/syauth-cli/src/main.rs` — adds `Cmd::InstallPresenced`,
+- `crates/syauth-cli/src/lib.rs`, wires the new `install_presenced`
+  module into the library API.
+- `crates/syauth-cli/src/main.rs`, adds `Cmd::InstallPresenced`,
   the `run_install_presenced` / `report_install_presenced`
   dispatchers, and the `run_install` chain that fires
   `install_presenced` when `--with-presenced=true`.
-- `crates/syauth-cli/src/install_pam.rs` — `InstallOpts` grows
+- `crates/syauth-cli/src/install_pam.rs`, `InstallOpts` grows
   `with_presenced` (default `true`), `presenced_dry_run`,
   `presenced_unit_dir`, `presenced_from`; the in-file unit-test
   fixture `opts_for` is updated to pass `with_presenced: false`.
-- `crates/syauth-cli/tests/install_pam.rs` — existing TC01-TC09 pin
+- `crates/syauth-cli/tests/install_pam.rs`, existing TC01-TC09 pin
   `--with-presenced=false` to stay hermetic; new
   `tc11_install_pam_bundles_presenced_by_default` exercises the
   bundled `--with-presenced=true` flow with `--presenced-dry-run`.
-- `crates/syauth-cli/tests/cli.rs` — adds the
+- `crates/syauth-cli/tests/cli.rs`, adds the
   `install_presenced_help_snapshot` test.
 - `crates/syauth-cli/tests/snapshots/cli__help_snapshot.snap` and
-  `crates/syauth-cli/tests/snapshots/cli__install_pam_help_snapshot.snap`
-  — refreshed for the new subcommand and the new install-pam flags.
-- `crates/syauth-transport/src/bluez_advertise.rs` — deletes the
+  `crates/syauth-cli/tests/snapshots/cli__install_pam_help_snapshot.snap`,
+refreshed for the new subcommand and the new install-pam flags.
+- `crates/syauth-transport/src/bluez_advertise.rs`, deletes the
   burst path: `BluerAdvertiser::connect`,
   `BluerAdvertiser::connect_inner`, `BluerAdvertiseSession`, its
   `Session` impl, `ensure_subscribed_and_ready`, the
@@ -439,10 +435,10 @@ crates/syauth-transport/src/bluez_advertise.rs` is run.
   and `ADVERTISE_DISCOVERABLE` are preserved because
   `crate::PersistentPeripheral` (S-003) and other callers still
   reference them.
-- `crates/syauth-transport/src/lib.rs` — drops the
+- `crates/syauth-transport/src/lib.rs`, drops the
   `ADVERTISE_READ_BUFFER_BYTES` re-export (only the burst path used
   it).
-- `specs/unlock-proximity/ROADMAP.md` — ticks the S-009 DoD bullets
+- `specs/unlock-proximity/ROADMAP.md`, ticks the S-009 DoD bullets
   and adds the Traceability paragraph.
 
 ### Closure-condition probes
@@ -459,11 +455,11 @@ $ git grep -n "fn connect" crates/syauth-transport/src/bluez_advertise.rs
 
 ### Regression probes
 
-- `cargo test -p syauth-pam` — 14 / 14 pass; the daemon Unix-socket
+- `cargo test -p syauth-pam`, 14 / 14 pass; the daemon Unix-socket
   client path is unaffected by the burst-path deletion.
-- `cargo test -p syauth-presenced` — 3 / 3 pass; the daemon already
+- `cargo test -p syauth-presenced`, 3 / 3 pass; the daemon already
   used `PersistentPeripheral`, not the burst path.
-- `cargo test -p syauth-transport` — 37 in-lib + 4 peripheral
+- `cargo test -p syauth-transport`, 37 in-lib + 4 peripheral
   contract tests pass; the DEV-004 link-encryption flag assertion
   still pins the LESC contract via the relocated
   `build_unlock_services` helper.
@@ -471,13 +467,13 @@ $ git grep -n "fn connect" crates/syauth-transport/src/bluez_advertise.rs
 ### Deviations
 
 None. The S-009 scope was implemented exactly as ROADMAP-named;
-SPEC §3.2 D1–D8 and §3.3 ML "IN — v0.1.0" are unchanged.
+SPEC §3.2 D1–D8 and §3.3 ML inclusion list for v0.1.0 are unchanged.
 
 The `BluerAdvertiser` struct (sans `connect`) survives as a pure
 audit-helper carrier because the CLI status path and the
 `PersistentPeripheral` builder still reach for the same
-`new_sync` / `rotating_uuid_for` surface; the SPEC §3 Scope item #9
+`new_sync` / `rotating_uuid_for` API; the SPEC §3 Scope item #9
 constraint ("`PersistentPeripheral` from S-003 is the only path
-that opens an advertisement") is honored — no `connect` /
+that opens an advertisement") is honored, no `connect` /
 `advertise` / `serve_gatt_application` call exists in
 `bluez_advertise.rs` after this change.

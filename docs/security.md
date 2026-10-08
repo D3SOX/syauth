@@ -1,117 +1,86 @@
-# syauth Security Model
+# syauth security model
 
-End-user guide to syauth's security properties. Companion to the
-protocol-level threat model at
+syauth lets a bonded Android phone approve Linux PAM authentication over
+Bluetooth. The desktop sends a fresh challenge; the phone signs it only after
+strong biometric authentication. The desktop verifies the response before PAM
+accepts it. No cloud service is involved.
+
+For the tested Arch/KDE configuration, see [installation](getting-started.md)
+and [PAM setup](pam.md). The detailed threat audit is in
 [`specs/threat/THREAT-2026-05-15.md`](../specs/threat/THREAT-2026-05-15.md).
-Written for an operator deciding whether to install syauth on Linux,
-not for a cryptographer.
+Some audit entries describe earlier implementations; the current setup and
+approval behavior are documented below.
 
-## Should you install syauth?
+## What phone approval provides
 
-If you type your `sudo` password 30 times a day and your phone is
-usually within arm's reach, syauth replaces that password with a tap
-on your phone. The phone still requires a biometric or PIN to approve
-the tap, so a stolen phone does not become a key to your desktop
-unless the attacker also defeats your phone's lockscreen. The password
-remains a fallback: when the phone is dead, far, or uncooperative,
-syauth steps aside and the normal password prompt appears.
+You do not type a laptop password during a successful phone approval, so that
+attempt exposes no typed password to shoulder surfing or keyboard capture.
+Someone using your unlocked terminal still needs approval on your bonded phone.
 
-If your threat model includes a coercive attacker who can force you to
-unlock your phone, a nation-state with custom Bluetooth injection
-hardware, or root-on-host malware that survives undetected, syauth
-does not change your situation. Use a Yubikey-style hardware token
-instead.
+The phone's Ed25519 signing key stays in Android Keystore. Each signing operation
+uses `BiometricPrompt.CryptoObject` with `AUTH_BIOMETRIC_STRONG` and a zero-second
+authentication window. Unlocking the phone or knowing its PIN does not satisfy
+this per-operation biometric requirement. There is no phone PIN/password fallback.
 
-## What syauth protects against
+The fingerprint prompt opens automatically for a verified request. Opening it
+or dismissing it does not authenticate. Dismissal returns to Authorize/Disallow;
+Authorize retries the biometric operation, and Disallow rejects the request.
 
-- **Shoulder surfing your password.** Approving on the phone is
-  invisible to a bystander.
-- **Password sniffing from a keylogger or evil-USB device.** The
-  password never leaves your fingers during a syauth unlock because
-  you never type it.
-- **Theft of ssh keys via a misconfigured home directory.** syauth's
-  secrets live in the kernel keyring on Linux and the
-  hardware-backed Android Keystore on the phone; they are never in
-  `~/.config` or `~/.ssh`.
-- **Opportunistic over-the-shoulder `sudo` attempts.** An attacker
-  who finds your terminal unlocked still needs your phone *and* your
-  fingerprint to escalate.
-- **Replayed unlock attempts within a session.** Every unlock
-  carries a fresh 16-byte nonce, and the PAM module's per-call
-  replay cache rejects any frame whose nonce it just admitted.
+Fresh nonces, bond-key MAC verification, response signature verification, and
+replay checks prevent a captured response from approving a different request.
+Pairing requires both the six-digit system Bluetooth comparison and the separate
+four-word app confirmation.
 
-## What syauth does NOT protect against
+## Limits
 
-- **A compromised PAM stack on the host.** If an attacker is already
-  root on your desktop they can read syauth's bond key and forge
-  unlocks. Detection (`journalctl -t pam_syauth`) and revocation
-  (`syauth revoke`) are your only recourse.
-- **A coerced biometric prompt.** An attacker who physically forces
-  you to put your finger on your phone's sensor unlocks the desktop
-  the same way you would. syauth piggybacks on the phone's biometric.
-- **Side-channel attacks on the bond key after the phone is
-  physically extracted and the Keystore is downgraded.** Use a phone
-  with a hardware-backed StrongBox keystore (Pixel 6+ or Samsung
-  S22+) if this matters to you.
-- **A nation-state with custom BLE injection hardware.** Active
-  link-layer jamming and protocol-level fuzzing campaigns are not
-  what v0.1 is sized for.
-- **A lost phone with an attacker who has your PIN.** Same residual
-  as Bitwarden unlock, Authy push, and Apple Auto Unlock.
+syauth does not measure distance. A Bluetooth relay can forward a request to the
+real bonded phone. The biometric requirement prevents approval without user
+interaction, but it cannot distinguish a coerced or mistakenly approved request.
+Check the displayed desktop name before scanning your fingerprint.
 
-## Operational hygiene
+Root access on the desktop can change PAM or bypass authentication. A compromised
+phone OS, compromised Keystore implementation, or biometric spoofing can also
+undermine the approval requirement. syauth does not protect against Bluetooth
+jamming or guarantee service availability.
 
-- **Keep the phone updated.** Android security patches are how the
-  Keystore stays trustworthy.
-- **Disable USB debugging on the production phone.** ADB plus root
-  is a fast path past the Keystore.
-- **Use a StrongBox-backed device when possible.** Pixel 6 or newer
-  is the easiest recommendation.
-- **Audit the bond store.** Run `syauth list` periodically; revoke
-  any peer you don't recognize before doing anything else.
-- **Rotate bonds when you change phones.** Pair the new phone first,
-  verify with `syauth list`, then `syauth revoke <old>`. Do not
-  leave a revoked phone bonded.
-- **Keep the password fallback in your PAM stack.** The
-  `syauth install-pam` helper inserts syauth at `auth required`
-  *before* the next module (typically `pam_unix`). Do not change
-  `required` to `sufficient` and do not delete the `pam_unix` line.
-  Both are foot-guns that either lock you out or weaken the stack.
-- **Do not pair in a crowd.** Pairing is the one moment where a
-  nearby attacker has a chance to spoof the device-picker. Pair at
-  home or in your office.
+The app first requests StrongBox for the Ed25519 key and falls back to the
+regular Keystore when StrongBox is unavailable or rejects the curve. Do not assume
+that a StrongBox-capable phone stores this particular key in StrongBox. Production
+pairing requires Android 13/API 33 or newer with Keystore Ed25519 support.
 
-## What changes between v0.1 and v0.2
+The phone bond file stores the Keystore alias, public key, and shared bond MAC
+key. It does not store the private signing key. The tested desktop setup uses
+user-owned storage under `/var/lib/syauth`, with restricted file and directory
+permissions. These locations and the shared MAC key should not be confused with
+the non-exportable phone signing key.
 
-The following residual risks have v0.2 candidates tracked in
-`specs/syauth/ROADMAP.md` "Out of roadmap (v0.2 candidates)." None
-are promised:
+## Password fallback and cancellation
 
-- **Wi-Fi RTT or UWB distance bounding** as an optional secondary
-  signal addresses relay attacks that synthesise fresh biometrics.
-- **Multi-peer racing** lets a user bond multiple phones and unlock
-  with whichever responds first.
-- **LAN/mDNS fallback transport** for desktops whose Bluetooth
-  adapter is broken.
-- **iOS port** of the companion app via the same UniFFI surface.
+The tested sudo configuration uses `auth sufficient pam_syauth.so` before the
+existing auth stack. Phone absence or denial leaves that stack available. KDE
+runs phone approval through its parallel `kde-fingerprint` service while its
+normal `kde` password service remains available. Preserve the existing mandatory
+checks and verify password fallback before relying on either setup.
 
-If one of these matters to you, file an issue and link the residual
-ID from the threat document.
-
-## Where to look in the source
-
-Pending approvals are dismissed when their PAM caller disconnects or the
-daemon's deadline expires. Cancellation uses a bond-key-authenticated frame
-and matches the current peer and nonce; it cannot grant authentication. Android
-also ignores late biometric callbacks after cancellation. Delivery is best
-effort, so lost BLE notifications can leave a stale UI visible, while the
-authentication request is already terminated. See
+When the PAM caller disconnects or the daemon deadline expires, the daemon sends
+a bond-key-authenticated cancellation for the matching peer and nonce. Android
+closes that approval and ignores late biometric callbacks. Cancellation cannot
+grant authentication. BLE delivery is best effort, so a lost notification can
+leave a stale phone dialog after the desktop request has ended. See
 [approval cancellation](cancellation.md) and its
 [threat model](../specs/threat/THREAT-2026-10-08-cancellation.md).
 
-The full per-threat audit (file paths, line ranges, test names) is in
-[`specs/threat/THREAT-2026-05-15.md`](../specs/threat/THREAT-2026-05-15.md).
-The high-traffic modules are `crates/syauth-core` (wire format,
-replay cache, MAC, signing), `crates/syauth-pam` (PAM entry points
-and panic boundary), and `crates/syauth-cli/src/pair.rs` (the
-pairing flow with LESC and OOB confirmation).
+## Operating the setup
+
+Keep Android and the desktop updated. Review bonds with `syauth list` and revoke
+unrecognized or retired peers with `syauth revoke`. Compare both pairing
+confirmations in a setting where you can identify the intended devices.
+
+Keep the documented PAM backups and rollback procedure available. Test with the
+phone unavailable and with a declined request. Disable USB debugging when you no
+longer need it for development.
+
+The relevant implementation is in `crates/syauth-core` for framing, MACs,
+signatures, and replay checks; `crates/syauth-presenced` for challenge handling;
+`crates/syauth-pam` for PAM results; and `syauth-android/app/src/main/kotlin` for
+Keystore signing and approval lifecycle.

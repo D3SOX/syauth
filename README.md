@@ -1,9 +1,9 @@
 # syauth
 
-> **Phone-as-key Linux unlock.** Sign your `sudo`, `login`, `gdm`, and
-> `swaylock` or KDE screen unlock with a biometric tap on the Android phone in your pocket
-> — no cloud service required. When the phone is out of range, syauth steps aside and
-> FIDO2 or your password handles the auth.
+Authenticate `sudo`, `login`, `gdm`, `swaylock`, or KDE screen unlock with
+your Android phone's fingerprint sensor. syauth works over Bluetooth without a
+cloud service. When the phone is unavailable, PAM continues to your configured
+password or FIDO2 authentication.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024-orange)](Cargo.toml)
@@ -14,29 +14,20 @@
 
 ## Why
 
-Every existing "phone unlock" for Linux is one of:
+Bluetooth proximity alone can be relayed. syauth requires fresh biometric
+authentication on the bonded phone for each request.
 
-- **Passive Bluetooth proximity** — a paired phone in range grants
-  unlock. Trivially broken by an LE relay attacker.
-- **`pam_u2f` only** — works, but the U2F key has to be on your
-  desk; your phone is already in your pocket.
-- **TOTP / Krypton** — needs a network round-trip, doesn't survive
-  offline use, no biometric per-unlock guarantee.
+- The phone signs a random challenge nonce with Ed25519. The desktop verifies
+  the response against the public key pinned during pairing.
+- Android Keystore holds the signing key with
+  `setUserAuthenticationRequired(true)`. An unlocked phone still requires a
+  fresh biometric before signing.
+- The PAM module uses `sufficient`, so an unavailable phone leaves the remaining
+  authentication stack available. The default installer can add FIDO2; the
+  Arch/KDE guide preserves existing password and fingerprint authentication.
 
-syauth threads the needle with three guarantees that the prior art
-doesn't carry together:
-
-1. **Cryptographic challenge–response.** Per-unlock random nonce
-   signed by the phone with Ed25519. Replay-proof, MITM-proof.
-2. **Per-unlock biometric.** The signing key lives in the Android
-   Keystore with `setUserAuthenticationRequired(true)`. A
-   stolen-but-unlocked phone can't sign. A relay attacker can't sign
-   either — the biometric prompt fires on the bonded phone, not
-   theirs.
-3. **Graceful fallback.** PAM stack control flag is `sufficient`,
-   not `required`. Phone absent → next module runs. The default
-   installer can add FIDO2; the Arch/KDE guide preserves your existing
-   password and fingerprint authentication.
+The fingerprint prompt opens automatically. Dismissing it returns to the
+Authorize/Disallow screen. Authorize retries biometrics; Disallow declines.
 
 ---
 
@@ -60,16 +51,15 @@ doesn't carry together:
                         + 4-word app-level OOB confirm)
 ```
 
-- The desktop **advertises** a rotating session UUID derived from
+- The desktop advertises a rotating session UUID derived from
   `BLAKE3(bond_key || current_minute)`. The phone observes presence
   via `CompanionDeviceManager` and opens a GATT client with
   `autoConnect=true`.
-- Pairing uses **BLE LE Secure Connections + numeric comparison**
-  (the 6-digit code) AND an **app-level 4-word OOB confirm** on top,
-  so the bond survives a future MITM in the LESC pairing itself.
-- The phone's Ed25519 private key is **minted on the phone** at pair
-  time and **never leaves the Keystore**. Each `sign()` call
-  triggers a fresh `BiometricPrompt`.
+- Pairing requires BLE LE Secure Connections numeric comparison of the six-digit
+  code and a separate four-word app confirmation. The app confirmation also
+  checks the bond if an attacker bypasses system pairing.
+- The phone creates its Ed25519 private key in Keystore during pairing.
+  `BiometricPrompt` authorizes each `sign()` operation.
 
 ---
 
@@ -160,32 +150,32 @@ A formal threat model lives in
 [`specs/threat/THREAT-2026-05-15.md`](specs/threat/THREAT-2026-05-15.md);
 the short version:
 
-- **T-001..T-006** (link-layer attacks): covered by LESC + per-unlock
+- T-001..T-006 (link-layer attacks): covered by LESC + per-unlock
   signing.
-- **T-007** (compromised phone): bound by the Keystore's
-  `setUserAuthenticationRequired(true)` — a stolen unlocked phone
+- T-007 (compromised phone): bound by the Keystore's
+  `setUserAuthenticationRequired(true)`, a stolen unlocked phone
   cannot sign without a fresh biometric.
-- **T-014** (biometric coercion / phishing prompt): hostname is
+- T-014 (biometric coercion / phishing prompt): hostname is
   sanitized + truncated on the Approve screen so a malicious peer
   can't render a multi-line phishing prompt.
-- **T-016** (compromised desktop): in scope for v0.2; v0.1 trusts
+- T-016 (compromised desktop): in scope for v0.2; v0.1 trusts
   the desktop's `bond_key`.
 
-When in doubt, the failure mode is `pam_syauth` returning
-`PAM_AUTHINFO_UNAVAIL` and the auth stack falling through to FIDO /
-password — never an exception, never a fail-open.
+If the phone is unavailable, `pam_syauth` returns `PAM_AUTHINFO_UNAVAIL`
+and PAM continues to the configured FIDO2 or password modules. A failed
+phone response does not grant authentication.
 
 ---
 
 ## Roadmap
 
-- **v0.1.0 (RC, current)** — five auth surfaces (sudo, login, su,
+- v0.1.0 (RC, current), five auth surfaces (sudo, login, su,
   gdm-password, swaylock), real-device LESC, Keystore-resident
   Ed25519, FIDO2 fallback installed in one CLI command.
-- **v0.2** — F-Droid + Play Store delivery, multi-host bonds,
+- v0.2, F-Droid + Play Store delivery, multi-host bonds,
   bond-revocation push from desktop, daemon presence on the system
   bus.
-- **v0.3** — pre-boot unlock (LUKS/cryptsetup), CompanionDeviceService
+- v0.3, pre-boot unlock (LUKS/cryptsetup), CompanionDeviceService
   in-process re-discovery so the daemon kick is no longer needed.
 
 Tracking is in
@@ -197,13 +187,11 @@ roadmap for the `sy` desktop integration is at
 
 ## Contributing
 
-PRs welcome. The repo's contract is in
-[`AGENTS.md`](AGENTS.md); short version:
+PRs welcome. Run the checks below and document user-visible behavior:
 
-- `cargo clippy --all-targets -- -D warnings` is the gate, not the
-  guideline.
+- `cargo clippy --all-targets -- -D warnings` must pass.
 - Every new module ships with tests before behaviour.
-- No `TODO` / `FIXME` / `unimplemented!()` in committed code — the
+- No `TODO` / `FIXME` / `unimplemented!()` in committed code, the
   pre-commit hook blocks it.
 - Open SPEC deviations live in
   [`docs/known-gaps.md`](docs/known-gaps.md) with a numbered

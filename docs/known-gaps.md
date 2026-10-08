@@ -1,7 +1,7 @@
-# syauth — Known SPEC Deviations (Audit Trail)
+# syauth, known SPEC deviations (audit trail)
 
-> **Purpose.** Every place in the source where the shipped behaviour diverges
-> from `specs/syauth/SPEC.md` §3.2 D1–D8 or §3.3 ML "IN — v0.1.0" gets a row
+> Purpose. Every place in the source where the shipped behaviour diverges
+> from `specs/syauth/SPEC.md` §3.2 D1–D8 or §3.3 ML inclusion list for v0.1.0 gets a row
 > here. Each row names:
 >
 > 1. the SPEC clause being weakened, by section and verbatim line,
@@ -10,45 +10,44 @@
 > 4. the closure condition (the test or behaviour change that removes the
 >    deviation from this file).
 >
-> Per `AGENTS.md` → "Scope Discipline (Non-Negotiable)", a deviation may only
-> ship with a row in this file. Without a row, the deviation must not exist.
+> A SPEC deviation requires a row in this file before it ships.
 >
 > Format: every row has a stable `id` so source-side `// SPEC-DEVIATION:`
 > markers can reference it.
 
 ## Open deviations
 
-_(none — all DEV-NNN rows are closed)_
+_(none, all DEV-NNN rows are closed)_
 
 ---
 
 ## Closed deviations
 
-### `DEV-003` — BLE role direction (closed 2026-05-17T20-28-32Z)
+### `DEV-003`, BLE role direction (closed 2026-05-17T20-28-32Z)
 
-**SPEC clause:** §3.2 D8 — "The **desktop** advertises a rotating session-bound UUID; the **phone** scans and connects".
+SPEC clause. §3.2 D8, "The desktop advertises a rotating session-bound UUID; the phone scans and connects".
 
-**Reopen history.** The first march pass closed the row on the unlock-channel inversion (desktop advertises rotating session UUID, phone scans → matches → opens `BluetoothGatt` client; `SyauthGattHostService` deleted; `BLUETOOTH_ADVERTISE` gone from the manifest; `BluerAdvertiser` shipped on the desktop). The reopen was filed because the **pair** channel in `pair_backend.rs` was still the opposite direction at the time (desktop scans for a phone-advertising pair-mode UUID), and the closure could not stand while the pair channel and unlock channel disagreed.
+Reopen history. The first march pass closed the row on the unlock-channel inversion (desktop advertises rotating session UUID, phone scans → matches → opens `BluetoothGatt` client; `SyauthGattHostService` deleted; `BLUETOOTH_ADVERTISE` gone from the manifest; `BluerAdvertiser` shipped on the desktop). The reopen was filed because the pair channel in `pair_backend.rs` was still the opposite direction at the time (desktop scans for a phone-advertising pair-mode UUID), and the closure could not stand while the pair channel and unlock channel disagreed.
 
-**What the re-march resolved.** DEV-001's re-march (closed 2026-05-17T19-48-31Z, earlier in this `/march` run) inverted the pair channel to match: `BluerPairBackend::scan_peers` now registers a GATT `Application` + an `LeAdvertisement` carrying `session_uuid_for(&[0u8; 32], current_minute)`, then awaits the phone's `phone-pubkey` write. The phone-side `RealPairBackend` drives `CompanionDeviceManager.associate` (CDM pivot) and opens a `BluetoothGatt` client to the picked desktop. The two channels are now SOT — pair AND unlock both use "desktop advertises, phone scans + connects". DEV-003's reopened-row closure is the verification + audit-trail step on top of that work.
+What the re-march resolved. DEV-001's re-march (closed 2026-05-17T19-48-31Z, earlier in this `/march` run) inverted the pair channel to match: `BluerPairBackend::scan_peers` now registers a GATT `Application` + an `LeAdvertisement` carrying `session_uuid_for(&[0u8; 32], current_minute)`, then awaits the phone's `phone-pubkey` write. The phone-side `RealPairBackend` drives `CompanionDeviceManager.associate` (CDM pivot) and opens a `BluetoothGatt` client to the picked desktop. The two channels are now CONSISTENT, pair AND unlock both use "desktop advertises, phone scans + connects". DEV-003's reopened-row closure is the verification + audit-trail step on top of that work.
 
-**Source locations (final, post-unification):**
-- `crates/syauth-cli/src/pair_backend.rs::BluerPairBackend::scan_peers` — pair-channel peripheral path; advertises `session_uuid_for(&[0u8; 32], current_minute)` rotating per minute.
-- `crates/syauth-transport/src/bluez_advertise.rs::BluerAdvertiser` — unlock-channel peripheral path; advertises `session_uuid_for(bond_key, current_minute)`.
-- `syauth-android/app/src/main/AndroidManifest.xml` — no `BLUETOOTH_ADVERTISE`; no `BLUETOOTH_SCAN` (CDM-routed). `BLUETOOTH_CONNECT` is the only declared `BLUETOOTH_*` permission.
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt` — phone-side scan + connect path via CDM, with the file's top-of-file comment explicitly stating "the DESKTOP advertises, the PHONE scans + connects via the OS picker. Matches DEV-003's unlock-channel direction for end-to-end consistency."
+Source locations (final, post-unification).
+- `crates/syauth-cli/src/pair_backend.rs::BluerPairBackend::scan_peers`, pair-channel peripheral path; advertises `session_uuid_for(&[0u8; 32], current_minute)` rotating per minute.
+- `crates/syauth-transport/src/bluez_advertise.rs::BluerAdvertiser`, unlock-channel peripheral path; advertises `session_uuid_for(bond_key, current_minute)`.
+- `syauth-android/app/src/main/AndroidManifest.xml`, no `BLUETOOTH_ADVERTISE`; no `BLUETOOTH_SCAN` (CDM-routed). `BLUETOOTH_CONNECT` is the only declared `BLUETOOTH_*` permission.
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt`, phone-side scan + connect path via CDM, with the file's top-of-file comment explicitly stating "the DESKTOP advertises, the PHONE scans + connects via the OS picker. Matches DEV-003's unlock-channel direction for end-to-end consistency."
 
-**Status:** **Closed** 2026-05-17T20-28-32Z — pair-channel direction unified with unlock-channel; see JOURNEY-DEV-003-invert-advertising.md Closure Appendix.
+Status. Closed 2026-05-17T20-28-32Z, pair-channel direction unified with unlock-channel; see JOURNEY-DEV-003-invert-advertising.md Closure Appendix.
 
-**Closure evidence:**
+Closure evidence.
 
-- `grep -rE 'BLUETOOTH_ADVERTISE' syauth-android/app/src/main/` returns empty — no advertise permission in any flavor manifest.
+- `grep -rE 'BLUETOOTH_ADVERTISE' syauth-android/app/src/main/` returns empty, no advertise permission in any flavor manifest.
 - `grep -nE 'BLUETOOTH_' syauth-android/app/src/main/AndroidManifest.xml` shows `BLUETOOTH_CONNECT` as the only `<uses-permission>` BLE permission (line 52-54); other matches are inside the manifest's leading comment block documenting the contract.
 - `git grep -l "// GAP: DEV-003"` returns no production-code marker.
 - `git grep -l "SyauthGattHostService" -- crates/ syauth-android/app/src/main/` is empty.
 - `git grep -l "BluerlessGattServerController\|startAdvertisingIfPossible" -- syauth-android/app/src/main/` is empty.
-- Pair-channel direction is asserted in code by the `scan_peers` function-level comment: "Inverted role per SPEC §3.2 D8: instead of scanning for a phone-advertised UUID, the desktop ADVERTISES the pair-mode service and waits for the phone to connect." Module header (`pair_backend.rs` lines 1-3) states: "**The desktop ADVERTISES**, the phone scans + connects (SPEC §3.2 D8 verbatim; matches DEV-003's unlock-channel direction)."
-- Unlock-channel direction is asserted in code by `bluez_advertise.rs` module header lines 1-7: "DEV-003 inverts the BLE role pair mandated by SPEC §3.2 D8: the **desktop** advertises a rotating session-bound UUID; the **phone** scans and connects."
+- Pair-channel direction is asserted in code by the `scan_peers` function-level comment: "Inverted role per SPEC §3.2 D8: instead of scanning for a phone-advertised UUID, the desktop ADVERTISES the pair-mode service and waits for the phone to connect." Module header (`pair_backend.rs` lines 1-3) states: "The desktop ADVERTISES, the phone scans + connects (SPEC §3.2 D8 verbatim; matches DEV-003's unlock-channel direction)."
+- Unlock-channel direction is asserted in code by `bluez_advertise.rs` module header lines 1-7: "DEV-003 inverts the BLE role pair mandated by SPEC §3.2 D8: the desktop advertises a rotating session-bound UUID; the phone scans and connects."
 - Real e2e pair flow on R5CY214FQHM completed earlier in this `/march` run (desktop 6-digit numeric-comparison code, phone-side `BOND_BONDED`, `post-bond exchange complete` logcat, "peer already bonded" on re-pair). Evidence trail in `specs/journeys/JOURNEY-DEV-001-real-lesc.md` Closure Appendix; not duplicated here.
 - Unlock flow e2e exercised by the on-radio TCs in `crates/syauth-transport/tests/dev004_link_encryption.rs` (`dev004_non_bonded_write_rejected`, `dev004_cccd_subscribe_rejected_when_unbonded`, `dev004_bonded_write_succeeds_e2e`), all `#[ignore]`-gated behind `SYAUTH_REAL_RADIOS=1` (same gate-pattern DEV-001 + DEV-002 closures used).
 - `make scope-discipline` clean.
@@ -57,20 +56,20 @@ _(none — all DEV-NNN rows are closed)_
 - `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:assembleDebug` `BUILD SUCCESSFUL`.
 - `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:testDebugUnitTest` `BUILD SUCCESSFUL`.
 
-**Closure timestamp:** 2026-05-17T20-28-32Z
+Closure timestamp. 2026-05-17T20-28-32Z
 
-**Pointer:** `specs/journeys/JOURNEY-DEV-003-invert-advertising.md` Closure Appendix.
+Pointer. `specs/journeys/JOURNEY-DEV-003-invert-advertising.md` Closure Appendix.
 
 ---
 
-### `DEV-002` — Ed25519 signing seed migration to Android Keystore (closed 2026-05-17T20-29-00Z)
+### `DEV-002`, Ed25519 signing seed migration to Android Keystore (closed 2026-05-17T20-29-00Z)
 
-**SPEC clause:** §3.2 D6 — "Android: hardware-backed Android Keystore with `STRONGBOX` when available, `setUserAuthenticationRequired(true)` so the key can only sign when the user has authenticated".
+SPEC clause. §3.2 D6, "Android: hardware-backed Android Keystore with `STRONGBOX` when available, `setUserAuthenticationRequired(true)` so the key can only sign when the user has authenticated".
 
-**Reopen history.** The first march pass closed the row on mechanical
+Reopen history. The first march pass closed the row on mechanical
 evidence (Keystore wiring shipped, `git grep -l
 InMemorySigningKeyProvider` empty, schema bumped to v2). DEV-001 was
-then reopened because the LESC pair flow had never actually run
+then reopened because the LESC pair flow had never run
 against a real device, which meant DEV-002's runtime contract was
 unexercised. Tonight's R5CY214FQHM e2e session (driven by the
 JOURNEY-DEV-001-real-lesc closure) ran the Keystore mint path for
@@ -83,7 +82,7 @@ fixed in this row's closure work:
    use ECGenParameterSpec`. The shipped fix uses
    `ECGenParameterSpec("Ed25519")`.
 2. StrongBox fallback now also fires on the Galaxy S25 Ultra
-   `Unsupported StrongBox EC: Ed25519` surface (raised as
+   `Unsupported StrongBox EC: Ed25519` error (raised as
    `InvalidAlgorithmParameterException`, not
    `StrongBoxUnavailableException`).
 3. Idempotent re-pair now loads the existing certificate and returns
@@ -106,47 +105,46 @@ exercise:
 - `LescResult.Bonded` was widened from `(bondKey, peerName)` to
   `(bondKey, peerName, keystoreAlias, phonePubkey)` so the real
   alias + pubkey reach the persisted `BondRecord` end-to-end. The
-  api-surface `BondRecord` in
+  API `BondRecord` in
   `pair/api/BondPersister.kt` carries the same fields, and
   `DiskBondPersister.persist` writes them through to disk.
   Without this widening the persister fell back to the
   `PLACEHOLDER_ALIAS` / `PLACEHOLDER_PUBKEY` constants and wrote
-  `keystore_alias = ""` + `phone_pubkey_hex = 0…0` on every pair —
-  which is the exact symptom tonight's first e2e run surfaced.
+  `keystore_alias = ""` + `phone_pubkey_hex = 0…0` on every pair,   which is the exact symptom tonight's first e2e run surfaced.
 
-**Source locations (post-relocation; `provision/` is gone, replaced by `bond/`):**
-- `crates/syauth-mobile/src/mobile.udl` — `FrameSigner` callback interface
-- `crates/syauth-mobile/src/implementation.rs` — `build_response_frame`
+Source locations (post-relocation; `provision/` is gone, replaced by `bond/`):
+- `crates/syauth-mobile/src/mobile.udl`, `FrameSigner` callback interface
+- `crates/syauth-mobile/src/implementation.rs`, `build_response_frame`
   receiver
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/approve/KeystoreFrameSigner.kt`
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/KeystoreKeyGenerator.kt`
-  — `AndroidKeystoreKeyGenerator`, `buildEd25519SpecBuilder`,
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/KeystoreKeyGenerator.kt`,
+`AndroidKeystoreKeyGenerator`, `buildEd25519SpecBuilder`,
   `strongBoxEcUnsupportedMessage`, `materialFromCertificate`
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt`
-  — `mintKeystoreEd25519` (production behaviour restored),
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt`,
+`mintKeystoreEd25519` (production behaviour restored),
   `runPostBondExchange` (typed `LescResult.Failed` on every keygen
   surface), `KEYSTORE_UNAVAILABLE_REASON`,
   `KEYSTORE_MINT_FAILED_PREFIX`, `KEYSTORE_ALIAS_PREFIX`
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/api/PairBackend.kt`
-  — `LescResult.Bonded` widened to carry `keystoreAlias` + `phonePubkey`
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/api/BondPersister.kt`
-  — `BondRecord` widened to carry `keystoreAlias` + `phonePubkey`
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingViewModel.kt`
-  — stashes `keystoreAlias` + `phonePubkey` on `onLescResult`,
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/api/PairBackend.kt`,
+`LescResult.Bonded` widened to carry `keystoreAlias` + `phonePubkey`
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/api/BondPersister.kt`,
+`BondRecord` widened to carry `keystoreAlias` + `phonePubkey`
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingViewModel.kt`,
+stashes `keystoreAlias` + `phonePubkey` on `onLescResult`,
   forwards them in `onOobYesTapped`
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/DiskBondPersister.kt`
-  — reads new fields from the api-surface `BondRecord` and writes
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/DiskBondPersister.kt`,
+reads new fields from the API `BondRecord` and writes
   them through `persistFull`
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/BondRecord.kt`
-  — `keystoreAlias: String` field (unchanged from prior row)
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bond/BondRecord.kt`,
+`keystoreAlias: String` field (unchanged from prior row)
 
-**Status:** **Closed** 2026-05-17T20-29-00Z — radio-free unit test
+Status. Closed 2026-05-17T20-29-00Z, radio-free unit test
 matrix green; on-disk bond.toml carries no Ed25519 private key
 material; STRONGBOX-preferred path + UserAuth gate pinned by
 `KeystoreKeyGeneratorTest`. See journey doc Closure Appendix for the
 bullet-by-bullet walk.
 
-**Closure evidence:**
+Closure evidence.
 
 - `git grep -l "InMemorySigningKeyProvider" -- syauth-android/app/src/main/`
   returns empty.
@@ -166,7 +164,7 @@ bullet-by-bullet walk.
 - `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:assembleDebug`
   `BUILD SUCCESSFUL`.
 - `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:testDebugUnitTest`
-  `BUILD SUCCESSFUL` — new `KeystoreKeyGeneratorTest` (10 tests) +
+  `BUILD SUCCESSFUL`, new `KeystoreKeyGeneratorTest` (10 tests) +
   4 new `RealPairBackendRuntimeTest` cases pinning the
   `runPostBondExchange` error matrix.
 - Radio-free `KeystoreKeyGeneratorTest` pins PURPOSE_SIGN +
@@ -175,11 +173,11 @@ bullet-by-bullet walk.
   predicate, the idempotent re-pair pubkey extraction, and the
   pre-Tiramisu `UnsupportedApi` throw.
 
-**Reopen-row bullet status:**
+Reopen-row bullet status.
 
 - "A real pair flow against the connected R5CY214FQHM device
   produces a `BondRecord` containing a non-empty `keystoreAlias`":
-  static evidence — the production code path now propagates alias +
+  static evidence, the production code path now propagates alias +
   pubkey end-to-end (proven by
   `runPostBondExchange_success_propagates_keystore_alias_and_pubkey_into_bonded`).
   The on-device bond.toml that lands on the next real pair will
@@ -201,18 +199,18 @@ bullet-by-bullet walk.
   `SYAUTH_REAL_RADIOS=1`. pamtester-level wrapping is DEV-005
   territory and not in this row's scope.
 
-**Closure timestamp:** 2026-05-17T20-29-00Z
+Closure timestamp. 2026-05-17T20-29-00Z
 
-**Pointer:** `specs/journeys/JOURNEY-DEV-002-keystore-strongbox.md`
+Pointer. `specs/journeys/JOURNEY-DEV-002-keystore-strongbox.md`
 Closure Appendix.
 
 ---
 
-### `DEV-001` — Provision file replaces LESC pairing (closed 2026-05-17T19-48-31Z)
+### `DEV-001`, Provision file replaces LESC pairing (closed 2026-05-17T19-48-31Z)
 
-**SPEC clause:** §3.2 D5 — "LE Secure Connections numeric comparison + out-of-band confirmation in syauth UI (display matching code on both ends)" and §3.3 ML "IN — v0.1.0" — "`syauth pair` CLI that runs LE Secure Connections numeric comparison and shows a 6-digit OOB confirmation in the terminal" + "Pairing screen shows the same 6-digit code as the CLI for OOB confirmation."
+SPEC clause. §3.2 D5, "LE Secure Connections numeric comparison + out-of-band confirmation in syauth UI (display matching code on both ends)" and §3.3 ML inclusion list for v0.1.0, "`syauth pair` CLI that runs LE Secure Connections numeric comparison and shows a 6-digit OOB confirmation in the terminal" + "Pairing screen shows the same 6-digit code as the CLI for OOB confirmation."
 
-**Reopen history.** The first march pass closed the row on mechanical evidence
+Reopen history. The first march pass closed the row on mechanical evidence
 (`StubPairBackend` removed from source, `provision-test` deleted, `make test`
 green at 278); a real e2e run on the connected R5CY214FQHM device then
 surfaced two defects: (1) pair-flow direction was inconsistent between
@@ -223,11 +221,11 @@ of advertised; Android shipped neither advertise nor scan code), and (2)
 defects are resolved as of the re-march and the CDM pivot captured in
 `specs/journeys/JOURNEY-DEV-001-real-lesc.md`.
 
-**Shipped behaviour after closure:** Desktop's `BluerPairBackend` advertises
+Shipped behaviour after closure. Desktop's `BluerPairBackend` advertises
 `SYAUTH_PAIR_SERVICE_UUID` carrying `session_uuid_for(&[0u8; 32],
 current_minute)` and runs the BlueZ Agent's `RequestConfirmation` callback
 for the LESC 6-digit code. Android's `RealPairBackend` drives
-`CompanionDeviceManager.associate` (CDM pivot — bypasses Samsung One UI's
+`CompanionDeviceManager.associate` (CDM pivot, bypasses Samsung One UI's
 `BLUETOOTH_PRIVILEGED` requirement on the unprivileged
 `BluetoothLeScanner` API), opens a `BluetoothGatt` client to the picked
 desktop, gates `ACTION_PAIRING_REQUEST` through
@@ -238,18 +236,18 @@ dedicated `syauth-pair-gatt` thread (main-thread deadlock avoided), and
 derives `bond_key` via the byte-identical HKDF-SHA256 helper that
 `syauth_core::bond_key_from_pubkeys` ships on the desktop side.
 
-**Source locations:** the production sites that closed the row:
+Source locations. The production sites that closed the row:
 - `crates/syauth-cli/src/pair_backend.rs::BluerPairBackend` (advertises during pair)
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/RealPairBackend.kt` (CDM-backed scan + post-bond exchange on `syauth-pair-gatt` thread)
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/AndroidCdmPairCompanionScanner.kt` (CDM `associate` wrapper)
 - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/impl/PairingBroadcastReceiver.kt` (variant gate)
 - `syauth-android/app/src/main/AndroidManifest.xml` (no `BLUETOOTH_ADVERTISE`; CDM owns the picker; `BLUETOOTH_CONNECT` remains for the post-pick GATT path)
 
-**Status:** **Closed** 2026-05-17T19-48-31Z — real e2e verified, see
+Status. Closed 2026-05-17T19-48-31Z, real e2e verified, see
 `specs/journeys/JOURNEY-DEV-001-real-lesc.md` Closure Appendix.
 
-**Closure evidence (verbatim from the orchestrator-driven e2e session on
-R5CY214FQHM):**
+Closure evidence (verbatim from the orchestrator-driven e2e session on
+R5CY214FQHM):
 
 - Desktop ran `target/debug/syauth pair --yes` and printed
   `BT numeric code: 000000   confirm on both devices` (LESC 6-digit code
@@ -271,15 +269,15 @@ R5CY214FQHM):**
 - Desktop's `/var/lib/syauth/bonds.toml` persists the bond record; a
   second `syauth pair --yes` invocation against the same phone fails
   with `bond store error: peer already bonded:
-  peer_id=fbd6cd666d0af720a5db0efd72b47cb5` — mechanical proof that the
+  peer_id=fbd6cd666d0af720a5db0efd72b47cb5`, mechanical proof that the
   bond is durable on the desktop side and that the phone's derived
   `peer_id` matches what the desktop derived from the same pubkey pair
   (closing the "both sides' `bond_key` matching" closure bullet).
 
-**Closure condition verification (every bullet of the reopened row):**
+Closure condition verification (every bullet of the reopened row).
 - Pair direction matches SPEC §3.2 D8 (desktop advertises, phone
-  scans+connects via CDM) and matches DEV-003's unlock-channel direction
-  — architecture is single-source-of-truth.
+  scans+connects via CDM) and matches DEV-003's unlock-channel direction,
+architecture is single-source-of-truth.
 - `crates/syauth-cli/src/pair_backend.rs::BluerPairBackend` ships a
   peripheral GATT advertiser carrying the pair-mode UUID for the current
   minute slot.
@@ -306,7 +304,7 @@ R5CY214FQHM):**
 - `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:testDebugUnitTest`
   `BUILD SUCCESSFUL`.
 - Real e2e run on the connected Android device completed a full LESC
-  pair, 4-word OOB confirmation, and bond persistence — see the
+  pair, 4-word OOB confirmation, and bond persistence, see the
   Closure Appendix in
   `specs/journeys/JOURNEY-DEV-001-real-lesc.md` for the full evidence
   trail (desktop 6-digit code from `/tmp/syauth_pair.log`, phone-side
@@ -315,23 +313,23 @@ R5CY214FQHM):**
   the desktop's "peer already bonded" rejection on re-pair, and
   `syauth list` returning the new bond).
 
-**Closure timestamp:** 2026-05-17T19-48-31Z
+Closure timestamp. 2026-05-17T19-48-31Z
 
-**Pointer:** `specs/journeys/JOURNEY-DEV-001-real-lesc.md` Closure
+Pointer. `specs/journeys/JOURNEY-DEV-001-real-lesc.md` Closure
 Appendix.
 
 ---
 
-### `DEV-004` — closed 2026-05-17
+### `DEV-004`, closed 2026-05-17
 
-**SPEC clause:** §3.2 D6 (key storage) and the threat model in
+SPEC clause. §3.2 D6 (key storage) and the threat model in
 `specs/threat/THREAT-2026-05-15.md` row `BLE link | T-001, T-003 | T-002
-| n/a | T-009 | T-008 | T-001` — the Information-disclosure cell maps
+| n/a | T-009 | T-008 | T-001`, the Information-disclosure cell maps
 to T-009 ("passive eavesdrop on the radio" / presence inference); SPEC
 §3.2 D5 names LESC numeric comparison as the source of the bonded link
 that BlueZ uses to satisfy the new authenticated-encryption flags.
 
-**Closure summary:** The desktop's `BluerAdvertiser` GATT `Application`
+Closure summary. The desktop's `BluerAdvertiser` GATT `Application`
 (in `crates/syauth-transport/src/bluez_advertise.rs`) was updated so
 the unlock-channel characteristics declare
 `encrypt_authenticated_read: true` on the challenge characteristic's
@@ -351,7 +349,7 @@ on-radio TCs (`dev004_non_bonded_write_rejected`,
 `dev004_bonded_write_succeeds_e2e`) `#[ignore]`-gated behind
 `SYAUTH_REAL_RADIOS=1` per the S-019 / DEV-001 / DEV-003 pattern.
 
-**Note (source-location relocation):** the original row's "Source
+Note (source-location relocation). The original row's "Source
 locations" section pointed at
 `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/GattServer.kt::GattPermissions`,
 but that file was deleted during the first DEV-003 pass when the GATT
@@ -360,7 +358,7 @@ flip therefore landed on the desktop's `BluerAdvertiser` `Application`
 registration in `crates/syauth-transport/src/bluez_advertise.rs`
 instead.
 
-**Note (runtime verification still pending):** DEV-004's mechanical
+Note (runtime verification still pending). DEV-004's mechanical
 closure (flag set on the Application + radio-free unit test green)
 stands independently of DEV-001/DEV-003 reopens. The on-radio TCs
 (`dev004_non_bonded_write_rejected`, `dev004_cccd_subscribe_rejected_when_unbonded`,
@@ -369,12 +367,12 @@ and a real bond exists. The closure is real for the structural change;
 the security-relevant runtime test is unproven until DEV-001 closes
 properly.
 
-**Closure timestamp:** 2026-05-17T00:00:00Z
+Closure timestamp. 2026-05-17T00:00:00Z
 
-**Pointer:** `specs/journeys/JOURNEY-DEV-004-link-encryption.md`
+Pointer. `specs/journeys/JOURNEY-DEV-004-link-encryption.md`
 (Implementation + Closure appendices).
 
-**Evidence:**
+Evidence.
 - `git grep -l "// GAP: DEV-004"` is empty.
 - The radio-free unit test
   `bluez_advertise::tests::dev004_security_flags_set_on_application`
@@ -393,10 +391,9 @@ properly.
 
 ## How to add a row
 
-1. Re-read `AGENTS.md` → "Scope Discipline (Non-Negotiable)" before opening
-   a new deviation.
+1. Read the affected SPEC clause before opening a new deviation.
 2. Verify the user has explicitly approved the deviation (the approval
-   message goes into the row verbatim — chat scrollback, PR comment, etc.).
+   message goes into the row verbatim, chat scrollback, PR comment, etc.).
 3. Assign the next `DEV-NNN` id (zero-padded, monotonic).
 4. Fill every section: SPEC clause, shipped behaviour, source locations,
    authorized-by, status, closure condition.

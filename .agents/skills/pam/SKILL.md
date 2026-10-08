@@ -3,14 +3,14 @@ name: pam
 description: PAM module scaffolding, integration, and safe end-to-end testing for syauth
 ---
 
-# Agent Instructions: PAM Module Workflow
+# Agent instructions: PAM module workflow
 
 <constraints>
 Do not run git commands. All version control is handled by the user.
-Follow the persona and contracts defined in AGENTS.md.
+Follow the repository specifications and documented contribution checks.
 Run `make lint` before considering any step complete.
 Never test PAM changes against the user's real login stack on the host machine. Always use a disposable service name (e.g. `syauth-test`) or a container/VM.
-Unsafe FFI code requires a documented `// SAFETY:` justification — see /ffi for the audit checklist.
+Unsafe FFI code requires a documented `// SAFETY:` justification, see /ffi for the audit checklist.
 </constraints>
 
 <role>
@@ -21,7 +21,7 @@ You produce PAM modules that are correct under the libpam C ABI, fail closed by 
 
 ---
 
-## When To Use This Skill
+## When to use this skill
 
 Invoke `/pam` when:
 - Adding or modifying a `pam_sm_*` entry point in the syauth PAM module.
@@ -34,7 +34,7 @@ For pure FFI-safety review of an existing module, use `/ffi` instead.
 
 ---
 
-## Phase 1: Understand The Module Contract
+## Phase 1: understand the module contract
 
 Before writing or changing code, write down which entry points you are touching and what each one must return on success and on every failure mode.
 
@@ -51,7 +51,7 @@ Document for each entry point:
 - Inputs read from `pam_handle_t` (user, rhost, tty, service, items).
 - Side effects (set creds, open BT channel, write log).
 - The full return-code matrix (success, denied, unavailable, ignore).
-- Default-deny path — what happens when the Android peer is offline.
+- Default-deny path, what happens when the Android peer is offline.
 
 <output_format>
 ```
@@ -69,7 +69,7 @@ Default on panic in Rust:   PAM_AUTH_ERR (catch_unwind boundary)
 
 ---
 
-## Phase 2: Scaffold The Crate
+## Phase 2: scaffold the crate
 
 For a new PAM module crate (or new entry point), enforce these invariants:
 
@@ -79,10 +79,10 @@ For a new PAM module crate (or new entry point), enforce these invariants:
    crate-type = ["cdylib"]
    name = "pam_syauth"   # produces libpam_syauth.so
    ```
-2. Symbol export — each `pam_sm_*` is `#[unsafe(no_mangle)] pub unsafe extern "C" fn`.
+2. Symbol export, each `pam_sm_*` is `#[unsafe(no_mangle)] pub unsafe extern "C" fn`.
 3. Every entry point body is wrapped in `std::panic::catch_unwind` and converts a caught panic to `PAM_AUTH_ERR` (never `PAM_SUCCESS`, never unwind across the FFI boundary).
 4. Use `pam-sys` or `pam-bindings` for the C types; do not redeclare them.
-5. Logging goes through `syslog` with facility `LOG_AUTHPRIV`. Never use `println!` / `eprintln!` from a PAM entry point — stdout/stderr inside a login session goes nowhere useful and can leak to the user.
+5. Logging goes through `syslog` with facility `LOG_AUTHPRIV`. Never use `println!` / `eprintln!` from a PAM entry point, stdout/stderr inside a login session goes nowhere useful and can leak to the user.
 
 <rule>
 The default branch of every match on PAM input MUST be a failure return code. Fail closed. A missing case is a bypass.
@@ -90,18 +90,18 @@ The default branch of every match on PAM input MUST be a failure return code. Fa
 
 ---
 
-## Phase 3: Conversation Flow (When Needed)
+## Phase 3: conversation flow (when needed)
 
 If your module prompts the user (rare for syauth, since the Android peer drives the flow):
 
 1. Fetch the conv struct: `pam_get_item(handle, PAM_CONV, ...)`.
-2. Allocate `pam_message`/`pam_response` arrays using PAM's allocator contract — the application frees responses, you free messages.
+2. Allocate `pam_message`/`pam_response` arrays using PAM's allocator contract, the application frees responses, you free messages.
 3. NUL-terminate every string going through the conv pointer. A missing NUL is a crash, not a logic bug.
 4. Treat any response read from the user as untrusted bytes; validate length before any further processing.
 
 ---
 
-## Phase 4: Hermetic Test Rig
+## Phase 4: hermetic test rig
 
 PAM is impossible to unit-test in isolation because it requires libpam to load the `.so`. Build a self-contained rig:
 
@@ -127,7 +127,7 @@ Never edit `/etc/pam.d/*` from test code. Always point pamtester at a fixture di
 
 ---
 
-## Phase 5: Inspect & Verify
+## Phase 5: inspect & verify
 
 Required checks before closing the task:
 
@@ -140,7 +140,7 @@ Required checks before closing the task:
 
 ---
 
-## Phase 6: Document
+## Phase 6: document
 
 Update `docs/pam.md` (create if missing) with:
 - Service file snippet for an admin to wire syauth into `/etc/pam.d/login` or `/etc/pam.d/sudo`.
@@ -151,12 +151,12 @@ Update `docs/pam.md` (create if missing) with:
 
 ---
 
-## Common Failure Modes
+## Common failure modes
 
 | Symptom | Likely cause |
 |---------|--------------|
 | `Authentication failure` with no syslog entry | Module crashed before syslog init; check that `openlog` is called before the first log call, and that the panic boundary returns a code. |
-| Stack hangs for ~30s then denies | Blocking I/O without timeout — the BT call must have a deadline shorter than the PAM service's own timeout. |
+| Stack hangs for ~30s then denies | Blocking I/O without timeout, the BT call must have a deadline shorter than the PAM service's own timeout. |
 | Works for one user, fails for another | `PAM_USER` not refreshed; you cached a username across calls into a `static`. PAM modules must be reentrant. |
 | Login loops after success | `pam_sm_setcred` not implemented or returns `PAM_AUTH_ERR`; auth modules MUST implement both. |
 | `dlopen` fails: `undefined symbol: pam_sm_authenticate` | Symbol was stripped or not `#[unsafe(no_mangle)]`; check with `nm -D`. |
@@ -181,7 +181,7 @@ Before closing the task:
 1. Fail closed. Every unknown input maps to denial, not success.
 2. Never panic across the FFI boundary. Wrap every entry point in `catch_unwind`.
 3. Never test against the host's real PAM stack. Use a fixture directory.
-4. Never use stdout/stderr inside a PAM module — use syslog.
+4. Never use stdout/stderr inside a PAM module, use syslog.
 5. PAM modules must be reentrant. No `static mut` global state.
 6. `pam_sm_setcred` is not optional for auth modules; implement it even if it returns `PAM_SUCCESS` immediately.
 

@@ -9,7 +9,7 @@ root. A user guard ensures other accounts keep their original authentication.
 ## Back up before editing
 
 Preserve existing local overrides and record which files were absent. For example,
-run this helper with `pkexec bash /path/to/helper.sh` from your KDE session:
+run this helper with `sudo bash /path/to/helper.sh` from your KDE session:
 
 ```sh
 #!/usr/bin/env bash
@@ -43,8 +43,9 @@ only this line, install it into `/etc/pam.d/syauth-test`, and run
 auth required pam_syauth.so socket=/run/user/1000/syauth/auth.sock
 ```
 
-A Pixel fingerprint should succeed. Remove the temporary service afterward. On
-the tested laptop, an equivalent isolated test used Python/ctypes with
+The Pixel fingerprint prompt opens automatically; scanning should succeed.
+Remove the temporary service afterward. On the tested laptop, an equivalent
+isolated test used Python/ctypes with
 `pam_start_confdir` and a temporary configuration directory, avoiding any change
 to the active PAM services. Phone unavailable/denied must fail this private test;
 in the real stacks below, `sufficient` allows the original authentication to run.
@@ -52,7 +53,7 @@ in the real stacks below, `sufficient` allows the original authentication to run
 ## sudo: insert before the existing auth stack
 
 Copy your existing `/etc/pam.d/sudo` into the scratch directory. Immediately before
-its **first auth line**, insert these lines, leaving all original lines intact:
+its first auth line, insert these lines, leaving all original lines intact:
 
 ```pam
 auth [success=1 default=ignore] pam_succeed_if.so user != LOCAL_USER quiet
@@ -64,12 +65,12 @@ For the selected user, syauth is tried first; other users skip it. The original
 Install the reviewed file with:
 
 ```sh
-pkexec install -m644 /path/to/scratch/sudo /etc/pam.d/sudo
+sudo install -m644 /path/to/scratch/sudo /etc/pam.d/sudo
 ```
 
 Test `sudo -k; sudo true` and approve the Pixel biometric prompt. Then repeat with
-the phone unavailable or deny approval and verify that the original password
-path still works before proceeding.
+the phone unavailable or select Disallow on the approval screen. Verify that
+the original password path still works before proceeding.
 
 ## KDE: use its parallel fingerprint stack
 
@@ -113,12 +114,13 @@ afterward; a phone denial never becomes success through `pam_permit` when the
 required fingerprint module fails.
 
 ```sh
-pkexec install -m644 /path/to/scratch/kde-fingerprint /etc/pam.d/kde-fingerprint
+sudo install -m644 /path/to/scratch/kde-fingerprint /etc/pam.d/kde-fingerprint
 ```
 
 Test these paths separately:
 
-1. Meta+L, activate unlock with Enter if needed, then approve the phone fingerprint.
+1. Meta+L, activate unlock with Enter if needed, then scan the phone fingerprint
+   when its prompt opens automatically.
    KDE should unlock and its password field should remain available while waiting.
 2. Meta+L again; enter the laptop password without approving on the phone. KDE
    should unlock and the pending phone dialog should close automatically.
@@ -131,7 +133,7 @@ password path. Existing distro files can change on upgrades, so compare local
 
 ## Roll back
 
-Run this helper with `pkexec bash /path/to/rollback.sh`. It restores original
+Run this helper with `sudo bash /path/to/rollback.sh`. It restores original
 local files and removes only overrides that were absent before setup:
 
 ```sh

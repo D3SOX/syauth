@@ -68,16 +68,15 @@ tool, so the dev box stays green.
 
 The signing-key fingerprints are published on the release page and
 SHOULD NOT change between point releases of the same minor version.
-A fingerprint change is a stop-the-line signal — verify against
-multiple channels before installing.
+If a fingerprint changes, verify it through multiple channels before installing.
 
 ### 1.4 SELinux / AppArmor notes
 
-- **Fedora (SELinux):** the RPM installs the PAM `.so` under
+- Fedora (SELinux). The RPM installs the PAM `.so` under
   `%{_libdir}/security/` which inherits the `lib_t` context by
   default. `restorecon` is run automatically by `rpm` so no manual
   step is needed.
-- **Ubuntu (AppArmor):** v0.1 does not ship an AppArmor profile.
+- Ubuntu (AppArmor). v0.1 does not ship an AppArmor profile.
   If an admin authors one, run
   `sudo aa-complain /etc/apparmor.d/usr.bin.syauth` for the first
   unlock attempt and inspect `/var/log/syslog` for any
@@ -85,8 +84,8 @@ multiple channels before installing.
 
 ## 2. F-Droid submission
 
-**Status:** v0.1 ships **without** F-Droid. The F-Droid listing is
-tracked as a **v0.2 enhancement** so the v0.1 gate is not blocked by
+Status. v0.1 ships without F-Droid. The F-Droid listing is
+tracked as a v0.2 improvement so the v0.1 gate is not blocked by
 an external review pipeline whose turnaround is measured in weeks.
 
 ### Plan
@@ -97,20 +96,18 @@ the PR URL in this section.
 
 ### Tracking placeholder
 
-- Submission PR: **not yet opened** (planned for v0.2).
+- Submission PR: not yet opened (planned for v0.2).
 - F-Droid app id: `com.sy.syauth.android` (matches the package's
   `applicationId` declared in
   [`syauth-android/app/build.gradle.kts`](../syauth-android/app/build.gradle.kts)).
 - Update this section when the submission PR lands; the URL is the
   audit trail end users can follow.
 
-### Why this satisfies the S-021 DoD line
+### Outstanding S-021 requirement
 
-The roadmap item asks for "F-Droid submission opened (link tracked
-in `docs/release-process.md`); not blocking for v0.1." This file
-**is** that tracking surface. The link slot is explicitly empty
-with a documented "v0.2" rationale, which is the policy a
-release engineer needs to commit to a tag.
+S-021 requests an opened F-Droid submission PR with a link in this file.
+This section has no submission link yet. The submission remains an outstanding
+requirement, although F-Droid is not a prerequisite for the v0.1 release.
 
 ## 3. Post-release checklist
 

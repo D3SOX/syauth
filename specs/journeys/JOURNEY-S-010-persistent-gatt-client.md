@@ -1,30 +1,30 @@
-# JOURNEY-S-010: Phone `PersistentGattClient` with `autoConnect=true`
+# JOURNEY-S-010: phone `PersistentGattClient` with `autoConnect=true`
 
-> **Spec anchors:** `specs/unlock-proximity/SPEC.md` §3 Approach
-> ("**`SyauthCompanionService`** (Android) — becomes a long-running
+> Spec anchors. `specs/unlock-proximity/SPEC.md` §3 Approach
+> ("`SyauthCompanionService` (Android), becomes a long-running
 > foreground service ... Maintains a single `BluetoothGatt` client per
 > bonded peer, opened with `autoConnect=true` and `TRANSPORT_LE`.
 > Subscribes to the challenge characteristic via CCCD write on every
 > fresh service discovery.").
 >
-> §3 Decisions row "Phone connection lifecycle" — "One persistent
+> §3 Decisions row "Phone connection lifecycle", "One persistent
 > `BluetoothGatt` per bonded peer, opened with `autoConnect=true` and
 > held by `SyauthCompanionService` as a long-running foreground
 > service".
 >
-> §4 Architecture diagram — phone-side stack lists the
+> §4 Architecture diagram, phone-side stack lists the
 > `PersistentGattClient` (`autoConnect=true`) box subscribing via
 > CCCD and routing `onCharacteristicChanged` into the verifier.
 >
-> **Roadmap row:** `specs/unlock-proximity/ROADMAP.md` Step S-010.
+> Roadmap row. `specs/unlock-proximity/ROADMAP.md` Step S-010.
 >
-> **Closure condition (verbatim from ROADMAP.md):**
+> Closure condition (verbatim from ROADMAP.md).
 >
 > ```
 > ./gradlew :app:testDebugUnitTest --tests "*PersistentGattClientTest*"
 > ```
 
-## Roadmap Link
+## Roadmap link
 - Source roadmap: [specs/unlock-proximity/ROADMAP.md](../unlock-proximity/ROADMAP.md) Step S-010.
 - Feature: a new phone-side class
   `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/PersistentGattClient.kt`
@@ -41,44 +41,43 @@
   `DirectGattController.kt` (which uses `autoConnect=false` and the
   CDM proximity-binding); S-011 swaps the service to use this new
   client, S-013 deletes `DirectGattController.kt`. S-010 does NOT
-  modify the service or the controller — it only adds the new file
+  modify the service or the controller, it only adds the new file
   and its Robolectric tests.
 
 ## 1. Journey
 
-When **an Android user has paired their phone with the desktop
+When an Android user has paired their phone with the desktop
 (BondRecord persisted, MAC known) and the phone-side foreground
-service is running**, I want to **hold a persistent BLE GATT
+service is running, I want to hold a persistent BLE GATT
 connection to the desktop with `autoConnect=true` so the OS
 transparently re-establishes the link across out-of-range / sleep
 transitions, notifications on the challenge characteristic stay
 subscribed across reconnections, and every challenge frame is
-delivered to the verifier within one BLE round-trip**, so I can
-**unlock my desktop via the `sudo` prompt with sub-2-second
+delivered to the verifier within one BLE round-trip, so I can
+unlock my desktop via the `sudo` prompt with sub-2-second
 end-to-end latency without the foreground service ever having to
-re-scan, re-pair, or re-discover services on every prompt**.
+re-scan, re-pair, or re-discover services on every prompt.
 
 ## 2. CJM
 
-Before S-010 the phone-side BLE path is `DirectGattController` —
-opened with `autoConnect=false`, gated on a `CompanionDeviceManager`
+Before S-010 the phone-side BLE path is `DirectGattController`, opened with `autoConnect=false`, gated on a `CompanionDeviceManager`
 proximity-binding callback that the OS schedules at battery-saver
 duty cycle. Every desktop `sudo` waits for the next CDM scan
 (seconds to minutes), then opens a fresh GATT (200–500 ms BLE
 connect), discovers services, writes the CCCD, then receives the
-challenge — well over the SPEC §4.3 "< 2.0 s" budget. S-010 inverts
+challenge, well over the SPEC §4.3 "< 2.0 s" budget. S-010 inverts
 that: the GATT connection is up at idle, the CCCD subscription
 survives reconnect (the Android stack re-applies the CCCD on
 service-rediscovery), and every challenge is a single notify
 round-trip on an already-open link.
 
-### Phase 1: Fresh first connect after pairing
+### Phase 1: fresh first connect after pairing
 
-**User Intent:** The user has just paired the phone with the
+User intent. The user has just paired the phone with the
 desktop, the foreground service has just been started, and the
 phone needs to open the persistent GATT link for the first time.
 
-**Actions:**
+Actions.
 1. `SyauthCompanionService.onCreate` (wired in S-011) constructs one
    `PersistentGattClient` per `BondRecord` and calls `.start()`.
 2. `PersistentGattClient.start()` resolves the desktop MAC via
@@ -97,11 +96,10 @@ phone needs to open the persistent GATT link for the first time.
    `setCharacteristicNotification(challenge, true)`, then writes
    `CCCD_ENABLE_NOTIFY` to the CCCD descriptor.
 
-**Pain / Risk:**
+Pain / risk.
 - Desktop advertiser is not yet up (e.g. `syauth-presenced.service`
   is in `activating`): `connectGatt` returns a handle but the link
-  never establishes. `autoConnect=true` makes this self-healing —
-  the OS keeps trying — but the test must assert the autoConnect
+  never establishes. `autoConnect=true` makes this self-healing,   the OS keeps trying, but the test must assert the autoConnect
   flag is set so the resilience is real, not assumed.
 - Challenge characteristic is missing from the discovered services
   (mis-paired desktop with stale UUID): `findCharacteristic` returns
@@ -114,23 +112,23 @@ phone needs to open the persistent GATT link for the first time.
   `callback`, `transport`) which is supported on the minSdk-26
   floor, and isolate the call behind a `GattOpener` seam.
 
-**Success Signal:** The Robolectric test
+Success signal. The Robolectric test
 `auto_connect_true_passed_to_connectGatt` observes the
 `GattOpener.open(...)` call captured with `autoConnect = true`,
 exactly once, with the expected `BluetoothDevice` and a non-null
 `BluetoothGattCallback`.
 
-### Phase 2: Phone goes out of range and OS reconnects without app intervention
+### Phase 2: phone goes out of range and OS reconnects without app intervention
 
-**User Intent:** The user walks away from the desktop (out of BLE
+User intent. The user walks away from the desktop (out of BLE
 range), then returns. The connection must reattach silently so the
 next `sudo` does not pay reconnect latency at the application
 layer.
 
-**Actions:**
+Actions.
 1. `onConnectionStateChange(STATE_DISCONNECTED)` fires when the
    peer goes out of range. The client does NOT call
-   `gatt.close()` — `autoConnect=true` instructs the OS to retry.
+   `gatt.close()`, `autoConnect=true` instructs the OS to retry.
 2. The user walks back into range. The OS BLE stack reconnects on
    its own schedule (not subject to background-app throttling per
    the JavaDoc cited in SPEC §2 "Technical Context").
@@ -140,9 +138,9 @@ layer.
    delivery is restored. This is the same code path Phase 1
    exercises, but on a reused `BluetoothGatt` handle.
 
-**Pain / Risk:**
+Pain / risk.
 - If the client closes the GATT handle on the first disconnect, the
-  `autoConnect=true` promise is broken — the OS no longer holds the
+  `autoConnect=true` promise is broken, the OS no longer holds the
   retry intent. `stop()` is the only entry that closes the handle
   (and clears the stored reference).
 - If the CCCD write is dropped on the second `onServicesDiscovered`
@@ -155,19 +153,19 @@ layer.
   attempting the descriptor write. The implementation guards both
   arms.
 
-**Success Signal:** Robolectric's `ShadowBluetoothGatt` captures
+Success signal. Robolectric's `ShadowBluetoothGatt` captures
 the `setCharacteristicNotification(challenge, true)` call and the
 CCCD descriptor's `value` matches `CCCD_ENABLE_NOTIFY` after the
 shadow's `BluetoothGattCallback.onServicesDiscovered` is invoked.
 
-### Phase 3: Challenge characteristic notify lands and the `onChallenge` callback fires
+### Phase 3: challenge characteristic notify lands and the `onChallenge` callback fires
 
-**User Intent:** The desktop issued a fresh `sudo`. The
+User intent. The desktop issued a fresh `sudo`. The
 `syauth-presenced` daemon NOTIFIED a challenge frame on the
 challenge characteristic. The phone must deliver those bytes to
 the verifier so the Approve flow can show the BiometricPrompt.
 
-**Actions:**
+Actions.
 1. The desktop writes a challenge frame; the BLE stack delivers it
    to the phone as `BluetoothGattCallback.onCharacteristicChanged`.
 2. The client's callback inspects `characteristic.uuid`; if it
@@ -179,7 +177,7 @@ the verifier so the Approve flow can show the BiometricPrompt.
    client behaves correctly on every API level the manifest
    declares.
 
-**Pain / Risk:**
+Pain / risk.
 - A notify lands for a characteristic other than the challenge
   (e.g. a future battery-level service): the UUID guard drops it
   silently. The DoD test pins this so the guard never disappears.
@@ -187,28 +185,28 @@ the verifier so the Approve flow can show the BiometricPrompt.
   pre-API-33 override reads `characteristic.value`; if null, the
   callback is suppressed. (The shadow's
   `writeIncomingCharacteristic` always sets a non-null value, so
-  the test exercises the happy path.)
+  the test exercises the success path.)
 - The callback throws: the contract is "the caller MUST NOT
   throw". The DoD test asserts the callback is invoked exactly
   once per delivered frame; throwing-callback resilience is a
   future-step concern (S-011's verifier already swallows
   exceptions).
 
-**Success Signal:** The Robolectric test
+Success signal. The Robolectric test
 `on_characteristic_changed_invokes_onChallenge` injects a
 `BluetoothGattCharacteristic` carrying a known byte payload, drives
 `ShadowBluetoothGatt`'s notify path, and asserts the test's
 `onChallenge` lambda was invoked once with the expected `peerId`
 and a byte-for-byte equal payload.
 
-### Phase 4: Approve flow writes the signed response back
+### Phase 4: approve flow writes the signed response back
 
-**User Intent:** The user has approved the prompt; the Keystore
+User intent. The user has approved the prompt; the Keystore
 has produced a signed response frame. The phone must write those
 bytes to the response characteristic so the desktop's PAM call
 can complete.
 
-**Actions:**
+Actions.
 1. The Approve flow looks up the `PersistentGattClient` for the
    target peer (S-011 wires this) and calls
    `writeResponse(frameBytes)`.
@@ -218,91 +216,89 @@ can complete.
 3. The method returns the boolean from `writeCharacteristic` (the
    caller can log a failure for diagnostic purposes).
 
-**Pain / Risk:**
+Pain / risk.
 - The GATT handle is null (the client was stopped, or never
   started): `writeResponse` returns `false` without throwing. The
-  Approve flow can surface a recoverable error to the user.
+  Approve flow can report a recoverable error to the user.
 - The response characteristic is missing (mis-paired desktop):
-  same — `writeResponse` returns `false`.
+  same, `writeResponse` returns `false`.
 - Race between `writeResponse` and `stop()`: stop() atomically
   swaps the handle to null; the write either runs against a live
   handle or returns false. No use-after-close.
 
-**Success Signal:** The Robolectric test
+Success signal. The Robolectric test
 `write_response_targets_response_characteristic` injects a service
 containing both characteristics, calls `writeResponse(payload)`,
 and asserts the shadow GATT's "last written bytes" equal `payload`
 exactly.
 
-### Friction and Opportunity
+### Friction and opportunity
 
 | Friction | Phase | Opportunity |
 |---|---|---|
 | Robolectric's `ShadowBluetoothDevice` does not expose a `getAutoConnect()` getter on `connectGatt(...)`, so the test cannot assert the autoConnect flag without a seam. | 1 | Introduce a `GattOpener` interface; production binds it to `device.connectGatt(...)`; the test supplies a fake that records every argument. The seam survives S-013's delete-DirectGattController step. |
-| The pre-API-33 `onCharacteristicChanged(g, c)` and the API-33+ `onCharacteristicChanged(g, c, v)` overrides must both route into the same `onChallenge` callback. | 3 | Copy the dual-override pattern from `DirectGattController.kt` lines 128–140 directly into `PersistentGattClient` — but duplicate the constants (`CCCD_UUID`, `CCCD_ENABLE_NOTIFY`) instead of importing, because S-013 deletes the file we'd import from. |
-| `stop()` must be idempotent so accidental double-stop from S-011's `onDestroy` + watchdog interplay is safe. | 2 | Use `AtomicReference<BluetoothGatt?>.getAndSet(null)` — the second call sees null and is a no-op. |
+| The pre-API-33 `onCharacteristicChanged(g, c)` and the API-33+ `onCharacteristicChanged(g, c, v)` overrides must both route into the same `onChallenge` callback. | 3 | Copy the dual-override pattern from `DirectGattController.kt` lines 128–140 directly into `PersistentGattClient`, but duplicate the constants (`CCCD_UUID`, `CCCD_ENABLE_NOTIFY`) instead of importing, because S-013 deletes the file we'd import from. |
+| `stop()` must be idempotent so accidental double-stop from S-011's `onDestroy` + watchdog calls is safe. | 2 | Use `AtomicReference<BluetoothGatt?>.getAndSet(null)`, the second call sees null and is a no-op. |
 
-### North Star Summary
+### Expected outcome
 
-The persistent GATT client is the phone's anchor for sub-2-second
-unlock latency. Opened once at service start, held at idle for the
-operator's entire session, reattached by the OS across range
-transitions without app code running, the client delivers every
-desktop challenge as a single notify on an already-open link and
-writes the signed response back on the same handle. With S-010 the
-phone-side stack matches the canonical Android background-BLE
-pattern (Apple Watch / CCC Digital Key / Tesla phone-as-key) and
-the per-PAM-call BLE connect ritual of `DirectGattController` is
-gone for good in S-013.
+The service opens the persistent GATT client once and holds it for the
+operator's session. The OS reconnects it when the phone moves out of and
+back into range. Challenges arrive as notifications on an already-open
+link, and the client writes signed responses on the same handle. This
+supports the sub-2-second unlock budget and uses Android's background BLE
+connection pattern. S-013 removes the per-PAM-call connection path in
+`DirectGattController`.
 
-## 3. UX Implementation and Assessment
 
-### Time to First Value
+## 3. UX implementation and assessment
+
+### Time to first value
 - [x] First persistent connect lands within one BLE advertise
-      interval of `start()` — bounded by the OS, not by the app.
+      interval of `start()`, bounded by the OS, not by the app.
 - [x] Robolectric tests give a green-bar signal in under 5 s on a
       developer laptop.
 
-### Onboarding Clarity
+### Onboarding clarity
 - [x] The class has a kdoc explaining the `autoConnect=true`
       decision and links the SPEC clause.
 - [x] Failure paths (`stop`-after-`stop`, write-after-`stop`) log
       with the `syauth.bg.persistent` tag so field debugging via
       `adb logcat` is one grep away.
 
-### Production-Ready Defaults
-- [x] `autoConnect = true` is the only call site — there is no
+### Production-ready defaults
+- [x] `autoConnect = true` is the only call site, there is no
       "demo" `autoConnect = false` path.
 - [x] `TRANSPORT_LE` is pinned (not auto / BR-EDR).
 
-### Golden Path Quality
+### Success path checks
 - [x] Connect → discover → subscribe → notify → forward callback is
       exercised end-to-end by the Robolectric test that simulates
       `onCharacteristicChanged`.
 
-### Decision Load
+### Decision load
 - [x] Constructor takes only what the class strictly needs
       (`context`, `adapter`, `peerId`, `deviceMac`, `onChallenge`).
-- [x] No configuration toggles, no boolean params — the only knob
+- [x] No configuration toggles, no boolean params, the only knob
       is the test-injected `GattOpener`.
 
-### Progressive Complexity
+### Progressive complexity
 - [x] Production code calls `start()` once at service boot; tests
       exercise `start → notify → writeResponse → stop` in isolation
       without standing up the full service.
 
-### Error Quality
+### Error quality
 - [x] Missing challenge characteristic logs `not present` at WARN
       and silently returns (no crash, no NPE).
 - [x] `writeResponse` returns `false` on every recoverable error
       (no handle, no characteristic, stack refuses); the caller can
-      surface a user-facing message.
+      show a message to the user.
 
-### Failure Safety
-- [x] `stop()` is idempotent — calling twice is a no-op.
+### Failure safety
+- [x] `stop()` is idempotent, calling twice is a no-op.
 - [x] `writeResponse` never throws.
 
-### Runtime Transparency
+### Runtime transparency
 - [x] Every state transition (`connecting`, `discovered`,
       `subscribed`, `frame received`, `stopped`) emits a structured
       logcat line under tag `syauth.bg.persistent`.
@@ -311,12 +307,12 @@ gone for good in S-013.
 - [x] The captured `peerId` is forwarded verbatim to `onChallenge`
       so logs in the service and logs here are joinable.
 
-### Cross-Surface Consistency
+### Consistency across interfaces
 - [x] Characteristic UUID constants match
       `crates/syauth-transport/src/bluez.rs` (the desktop side) and
       `GattServer.kt` (the existing phone-side declarations).
 
-### Workflow Consistency
+### Workflow consistency
 - [x] The test file lives in
       `syauth-android/app/src/test/kotlin/com/sy/syauth/android/bg/`
       (the existing convention used by `BleScanControllerTest.kt`
@@ -324,35 +320,35 @@ gone for good in S-013.
 - [x] The Robolectric runner + `@Config(sdk = [34])` annotation
       matches the existing test pattern.
 
-### Change Safety
-- [x] The new file is additive — no existing file is modified by
+### Change safety
+- [x] The new file is additive, no existing file is modified by
       S-010.
 - [x] S-011's swap of the service is a separate, smaller diff.
 
-### Experimentation Safety
+### Experimentation safety
 - [x] The test seam (`GattOpener`) is package-private; production
       consumers cannot inject a fake by accident.
 
-### Interaction Latency
-- [x] No `Thread.sleep`, no polling — every callback is event-driven.
+### Interaction latency
+- [x] No `Thread.sleep`, no polling, every callback is event-driven.
 
-### Developer Feedback Speed
+### Developer feedback speed
 - [x] `:app:testDebugUnitTest --tests "*PersistentGattClientTest*"`
       runs in seconds; no instrumented-test rig needed.
 
-### Team Scale
+### Team scale
 - [x] The file is reviewable on its own (≤ 200 lines) and the test
       file pins every contract.
 
-### System Scale
-- [x] One instance per bonded peer — `ConcurrentHashMap<peerId,
+### System scale
+- [x] One instance per bonded peer, `ConcurrentHashMap<peerId,
       PersistentGattClient>` in S-011 scales to multi-peer.
 
-### Right Behavior by Default
+### Right behavior by default
 - [x] `autoConnect = true` is the production wiring; no fallback
       to `false`.
 
-### Anti-Bypass Design
+### Anti-bypass design
 - [x] The `GattOpener` interface has exactly one production impl;
       a future contributor cannot accidentally pass `false` because
       `start()` doesn't take an `autoConnect` parameter.
@@ -361,48 +357,48 @@ gone for good in S-013.
 
 ### TC-01: `auto_connect_true_passed_to_connectGatt`
 
-**Given** a Robolectric-driven `PersistentGattClient` constructed
+Given a Robolectric-driven `PersistentGattClient` constructed
 with a fake `GattOpener` that records every `open(...)` argument.
-**When** the test calls `client.start()`.
-**Then** the recorded `autoConnect` flag is `true`, the recorded
+When the test calls `client.start()`.
+Then the recorded `autoConnect` flag is `true`, the recorded
 device's MAC matches the constructor's `deviceMac`, and the
 recorded callback is non-null. Exactly one `open(...)` invocation
 is recorded.
 
 ### TC-02: `on_services_discovered_subscribes_via_cccd`
 
-**Given** a `PersistentGattClient` whose `GattOpener` returns a
+Given a `PersistentGattClient` whose `GattOpener` returns a
 shadow `BluetoothGatt` with a discovered service that has both the
 challenge characteristic (with a CCCD descriptor) and the response
 characteristic.
-**When** the test drives `ShadowBluetoothGatt`'s
+When the test drives `ShadowBluetoothGatt`'s
 `onConnectionStateChange(STATE_CONNECTED)` then
 `onServicesDiscovered`.
-**Then** `ShadowBluetoothGatt` reports that
+Then `ShadowBluetoothGatt` reports that
 `setCharacteristicNotification(challenge, true)` was called and the
 CCCD descriptor's `value` equals `CCCD_ENABLE_NOTIFY`.
 
 ### TC-03: `on_characteristic_changed_invokes_onChallenge`
 
-**Given** a fully-started `PersistentGattClient` with a subscribed
+Given a fully-started `PersistentGattClient` with a subscribed
 challenge characteristic and a recorder lambda for `onChallenge`.
-**When** the test invokes
+When the test invokes
 `BluetoothGattCallback.onCharacteristicChanged(g, challenge,
 payload)` with the challenge UUID and a known payload.
-**Then** the recorder was called exactly once with the constructor's
+Then the recorder was called exactly once with the constructor's
 `peerId` and a byte-for-byte equal payload. A second notify on a
 different UUID does NOT invoke the recorder.
 
 ### TC-04: `write_response_targets_response_characteristic`
 
-**Given** a fully-started `PersistentGattClient` and a payload
+Given a fully-started `PersistentGattClient` and a payload
 `response_bytes`.
-**When** `client.writeResponse(response_bytes)` is called.
-**Then** the shadow GATT reports the response characteristic was
+When `client.writeResponse(response_bytes)` is called.
+Then the shadow GATT reports the response characteristic was
 the target of the last `writeCharacteristic`, its `value` equals
 `response_bytes`, and the method returned `true`.
 
-## Acceptance Criteria
+## Acceptance criteria
 
 - [x] `PersistentGattClient.kt` exists with the contract above.
 - [x] `PersistentGattClientTest::auto_connect_true_passed_to_connectGatt`
@@ -424,15 +420,15 @@ the target of the last `writeCharacteristic`, its `value` equals
 ## Implementation
 
 Files created in S-010:
-- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/PersistentGattClient.kt`
-  — new sibling to `DirectGattController.kt`; owns one
+- `syauth-android/app/src/main/kotlin/com/sy/syauth/android/bg/PersistentGattClient.kt`,
+new sibling to `DirectGattController.kt`; owns one
   `BluetoothGatt` per bonded peer opened with `autoConnect=true`;
   exposes `start()`, `stop()`, `writeResponse(frameBytes)`;
   package-private `GattOpener` seam captures `autoConnect` in
   tests because Robolectric's `ShadowBluetoothDevice` 4.11.1 lacks
   a `getAutoConnect()` getter.
-- `syauth-android/app/src/test/kotlin/com/sy/syauth/android/bg/PersistentGattClientTest.kt`
-  — Robolectric-driven JVM test that pins all four DoD test cases:
+- `syauth-android/app/src/test/kotlin/com/sy/syauth/android/bg/PersistentGattClientTest.kt`,
+Robolectric-driven JVM test that pins all four DoD test cases:
   `auto_connect_true_passed_to_connectGatt`,
   `on_services_discovered_subscribes_via_cccd`,
   `on_characteristic_changed_invokes_onChallenge`,
@@ -443,20 +439,20 @@ Files modified in S-010: none. The file is wired into
 deleted in S-013.
 
 Key seams introduced:
-- `GattOpener` — package-private functional interface
+- `GattOpener`, package-private functional interface
   (`fun open(device: BluetoothDevice, autoConnect: Boolean,
   callback: BluetoothGattCallback): BluetoothGatt?`). Production
   binds `DefaultGattOpener` which calls
   `device.connectGatt(context, autoConnect, callback,
   TRANSPORT_LE)`. Tests inject a recording fake.
 
-Constants (duplicated, not imported, per the scope brief — see
+Constants (duplicated, not imported, per the scope brief, see
 "Files likely affected" / S-013 plans to delete
 `DirectGattController.kt`):
 - `CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")`
 - `CCCD_ENABLE_NOTIFY = byteArrayOf(0x01, 0x00)`
 
 Characteristic UUIDs are imported from `GattServer.kt` because
-that file is the single source of truth for the syauth wire UUIDs
+that file is the shared definition for the syauth wire UUIDs
 (`SYAUTH_CHALLENGE_CHAR_UUID`, `SYAUTH_RESPONSE_CHAR_UUID`) and is
 not slated for deletion.

@@ -1,6 +1,6 @@
 # JOURNEY-S-016: `sy syauth doctor`
 
-> **Spec anchors:**
+> Spec anchors.
 >
 > - `specs/unlock-proximity/SPEC.md` §3 Scope item 24 (verbatim):
 >
@@ -23,10 +23,10 @@
 >   The `keys_<peer_id>_mode` probe is the operator-visible canary
 >   for that file-mode invariant; if the keys file is `0644` the
 >   bond_key is leaking to every local UID and the doctor must
->   surface a `warn` summary so the operator catches it before the
+>   report a `warn` summary so the operator catches it before the
 >   next `sudo` lands a relay.
 >
-> - `specs/unlock-proximity/SPEC.md` §8 Risks — SSH-session caveat
+> - `specs/unlock-proximity/SPEC.md` §8 Risks, SSH-session caveat
 >   (verbatim):
 >
 >   > Operator runs sudo from an SSH session (different
@@ -42,15 +42,15 @@
 >   output is enough to diagnose the SSH-from-laptop case without
 >   asking the operator to dump their env.
 >
-> **Roadmap row:** `specs/unlock-proximity/ROADMAP.md` Step S-016.
+> Roadmap row. `specs/unlock-proximity/ROADMAP.md` Step S-016.
 >
-> **Closure condition (verbatim from ROADMAP.md):**
+> Closure condition (verbatim from ROADMAP.md).
 >
 > ```
 > cargo test -p syauth-cli --test doctor_flow
 > ```
 
-## Roadmap Link
+## Roadmap link
 - Source roadmap: [specs/unlock-proximity/ROADMAP.md](../unlock-proximity/ROADMAP.md) Step S-016.
 - Feature: New `syauth doctor` subcommand. Inspects daemon liveness
   (PID file + socket reachability), bonds file presence and
@@ -64,19 +64,19 @@
 
 ## 1. Journey
 
-When **a syauth operator notices that `sudo` is suddenly falling
+When a syauth operator notices that `sudo` is suddenly falling
 through to FIDO (or worse, prompting for a UNIX password) and
 suspects a regression somewhere in the
 `pam_syauth` → `syauth-presenced` → BlueZ → bond-store → phone
-chain**, I want to **type `sy syauth doctor` and immediately see
+chain, I want to type `sy syauth doctor` and immediately see
 nine `key=value` lines that name the broken component plus a final
-`doctor=ok|warn|fail` summary**, so I can **paste the output into
+`doctor=ok|warn|fail` summary, so I can paste the output into
 an ops channel, fix the root cause (`systemctl --user start
 syauth-presenced`, `chmod 0600`, `bluetoothctl power on`, or move
 my `sudo` invocation off the SSH session), and re-run the doctor
-to confirm green — without grepping syslog, parsing
+to confirm green, without grepping syslog, parsing
 `bonds.toml` by hand, or attaching `strace` to a stuck PAM
-module**.
+module.
 
 ## 2. CJM
 
@@ -88,50 +88,49 @@ single command that probes every link of the chain at once and
 prints a result they can grep, diff, or paste. Today they would
 have to run `systemctl --user status syauth-presenced`,
 `ls -la /var/lib/syauth/keys/`, `bluetoothctl show`, `tail -n 10
-/var/lib/syauth/last.log`, and `echo $XDG_RUNTIME_DIR` separately
-— five commands, four different output formats, no summary. The
+/var/lib/syauth/last.log`, and `echo $XDG_RUNTIME_DIR` separately,
+five commands, four different output formats, no summary. The
 doctor collapses that into one.
 
-### Phase 1: Happy path — daemon up, bonds healthy, no warnings
+### Phase 1: success path, daemon up, bonds healthy, no warnings
 
-**User Intent:** Confirm the unlock chain is green before relying
+User intent. Confirm the unlock chain is green before relying
 on it (e.g., before a remote demo, or as the first step in a CI
 smoke job that runs after `sy syauth install-pam`).
 
-**Actions:**
+Actions.
 
 1. Operator runs `sy syauth doctor` in their interactive shell.
 2. Reads the nine `key=value` lines top-to-bottom.
 3. Sees the final line `doctor=ok` and moves on.
 
-**Pain / Risk:**
+Pain / risk.
 
 - The doctor could miss a degraded-but-not-dead component (e.g.,
-  daemon up but `bluez_adapter=unpowered`) and report `ok` —
-  every probe failure must downgrade the summary to at least
+  daemon up but `bluez_adapter=unpowered`) and report `ok`,   every probe failure must downgrade the summary to at least
   `warn`.
 - The doctor could spend tens of seconds on the BlueZ DBus probe
-  and turn the operator's `Ctrl-C` reflex into a habit — the
+  and turn the operator's `Ctrl-C` reflex into a habit, the
   daemon-socket probe MUST use the same 50 ms `DAEMON_CONNECT_TIMEOUT`
   the PAM module uses, and the BlueZ probe must be best-effort
   (any failure folds into `unknown`, not into a hang).
 - The doctor could leak a sensitive bytes-of-the-bond-key field
-  into greppable output — the probe surface is mode + presence
+  into greppable output, the probe output is mode + presence
   only; bytes never enter `stdout`.
 
-**Success Signal:** Operator sees `doctor=ok` on the final line
+Success signal. Operator sees `doctor=ok` on the final line
 and the eight prior probes all report a green token
 (`daemon=up`, `bonds_count=N`, `keys_*_mode=0600`, `bluez_adapter`
 in `{powered, unknown}`, etc.).
 
-### Phase 2: Daemon-down case — flags systemctl + suggests start command
+### Phase 2: daemon-down case, flags systemctl + suggests start command
 
-**User Intent:** Diagnose a stuck unlock when `sudo` falls through
+User intent. Diagnose a stuck unlock when `sudo` falls through
 to FIDO immediately. Suspected cause: the `syauth-presenced`
 systemd user unit is not running (just booted from cold, or the
 unit was stopped during a sysadmin shake-down).
 
-**Actions:**
+Actions.
 
 1. Operator runs `sy syauth doctor`.
 2. Reads `daemon=down: <reason>` on the second probe line.
@@ -139,36 +138,34 @@ unit was stopped during a sysadmin shake-down).
 4. Runs `systemctl --user start syauth-presenced.service`.
 5. Re-runs `sy syauth doctor`; sees `daemon=up` and `doctor=ok`.
 
-**Pain / Risk:**
+Pain / risk.
 
 - The doctor's `daemon=down` line could be ambiguous between
-  "socket file missing" and "socket present but daemon hung" —
-  the `reason` token must distinguish (`socket-missing`,
+  "socket file missing" and "socket present but daemon hung",   the `reason` token must distinguish (`socket-missing`,
   `connect-refused`, `frame-error`, `timeout`).
 - The doctor could shell out to `systemctl --user` even on a CI
   host without `systemd-logind`, dump scary stderr, and confuse
-  the operator — the `systemctl` probe must suppress stderr and
+  the operator, the `systemctl` probe must suppress stderr and
   fold any error into `unknown`.
 - The doctor could mark the summary `fail` instead of `warn` on
-  daemon-down, training the operator to ignore the difference —
-  `daemon=down` is `fail`; missing systemd binary is `warn` (the
+  daemon-down, training the operator to ignore the difference,   `daemon=down` is `fail`; missing systemd binary is `warn` (the
   daemon could still be alive under a different launcher).
 
-**Success Signal:** Operator's third line of output names
+Success signal. Operator's third line of output names
 `systemctl_user_unit=inactive`, they remember `systemctl --user
 start syauth-presenced.service` from `docs/`, and the next doctor
 run is green.
 
-### Phase 3: Permission-broken case — keys file is 0644 instead of 0600
+### Phase 3: permission-broken case, keys file is 0644 instead of 0600
 
-**User Intent:** Diagnose a regression after restoring
+User intent. Diagnose a regression after restoring
 `/var/lib/syauth/` from a backup. The restore preserved owner and
-group but reset modes to the umask default (`0644`) — the
+group but reset modes to the umask default (`0644`), the
 bond_key is now world-readable. The operator does not realise
 this until the doctor surfaces it; sudo still works because the
 daemon doesn't care about file mode for its read.
 
-**Actions:**
+Actions.
 
 1. Operator runs `sy syauth doctor` as a post-restore sanity check.
 2. Reads a `keys_<peer_id>_mode=0644 (expected 0600)` line for
@@ -178,35 +175,34 @@ daemon doesn't care about file mode for its read.
 5. Re-runs the doctor; sees `keys_<peer_id>_mode=0600` and
    `doctor=ok`.
 
-**Pain / Risk:**
+Pain / risk.
 
 - The doctor could read the keys file bytes to validate them and
-  accidentally write a re-encoded copy elsewhere — the keys probe
+  accidentally write a re-encoded copy elsewhere, the keys probe
   MUST be read-only (`stat`-only), never `read_to_end`.
 - The doctor could flag a `0600`-but-symlink path as fine when
-  the symlink target is `0644` — we follow the symlink for the
+  the symlink target is `0644`, we follow the symlink for the
   mode check so the surfaced mode is the *effective* mode the
   daemon sees.
 - The doctor could iterate the keys dir in non-deterministic
-  filesystem order, breaking the `--json` consumer's diff —
-  entries are sorted by `peer_id` before emit.
+  filesystem order, breaking the `--json` consumer's diff,   entries are sorted by `peer_id` before emit.
 
-**Success Signal:** Operator's per-key mode lines all read
+Success signal. Operator's per-key mode lines all read
 `0600`, `doctor=ok`, and the bond_key is no longer
 world-readable.
 
-### Phase 4: SSH-session caveat — XDG_RUNTIME_DIR mismatch
+### Phase 4: ssh-session caveat, XDG_RUNTIME_DIR mismatch
 
-**User Intent:** Diagnose why `sudo` works from the laptop's
+User intent. Diagnose why `sudo` works from the laptop's
 console but fails from an SSH session. Suspected cause:
 `XDG_RUNTIME_DIR` is unset in the SSH environment so the PAM
 module looks at `/run/user/$UID/syauth/auth.sock` while the
-daemon — started by the console session — bound to
+daemon, started by the console session, bound to
 `/run/user/$UID/syauth/auth.sock` *too*, but the PAM module is
 running as a different `$UID` (the operator's, not the target
 user's).
 
-**Actions:**
+Actions.
 
 1. Operator runs `sy syauth doctor` over SSH.
 2. Reads `xdg_runtime_dir=unset (fallback /run/user/1000)`.
@@ -216,27 +212,27 @@ user's).
 5. Either re-runs `sudo` from a `screen` session attached to the
    console, or passes `--socket` to the PAM module.
 
-**Pain / Risk:**
+Pain / risk.
 
 - The doctor could pretend `XDG_RUNTIME_DIR` is set when the env
-  is missing and the fallback path happens to exist — the probe
+  is missing and the fallback path happens to exist, the probe
   must distinguish "env-set" from "env-unset, fallback used"
   explicitly.
 - The doctor could itself crash if `XDG_RUNTIME_DIR` is set to a
-  non-existent path — the probe records the path verbatim, never
+  non-existent path, the probe records the path verbatim, never
   `stat`s it as a precondition for emit.
 - The doctor could fold the SSH-caveat into the `daemon=down`
-  reason and hide the SPEC §8 attribution — the
+  reason and hide the SPEC §8 attribution, the
   `xdg_runtime_dir` line is its own probe so dashboards can
   alert on the SSH case separately.
 
-**Success Signal:** Operator's output names both
+Success signal. Operator's output names both
 `xdg_runtime_dir=unset (fallback ...)` and `daemon=down`, they
 match it to `docs/known-gaps.md` SSH row, and their next
 `sudo` succeeds (either from the console or with `--socket`
 passed in).
 
-### Friction and Opportunity
+### Friction and opportunity
 
 | Friction | Phase | Opportunity |
 |----------|-------|-------------|
@@ -246,7 +242,7 @@ passed in).
 | BlueZ DBus probe could hang the doctor on a broken DBus stack | Phase 1 | Best-effort with a hard timeout: any DBus error folds into `bluez_adapter=unknown`, never blocks |
 | Operator dashboards can't parse the human prose status output | All | `--json` mode emits the same data as a typed JSON object via `serde_json::to_string_pretty` |
 
-### North Star Summary
+### Expected outcome
 
 A single `sy syauth doctor` run prints nine greppable lines that
 diagnose every link of the unlock chain in under one second, and
@@ -255,47 +251,47 @@ alert on without parsing prose. `--json` mode emits the same
 data shape so tooling can consume the doctor without scraping
 its key=value lines.
 
-## 3. UX Implementation and Assessment
+## 3. UX implementation and assessment
 
-### Time to First Value
+### Time to first value
 - [x] One `sy syauth doctor` run prints the full diagnostic; no
-      sub-commands, no flags needed for the happy path.
+      sub-commands, no flags needed for the success path.
 - [x] Each probe has a hard timeout (50 ms socket connect, BlueZ
       best-effort) so wall-clock stays under one second on a
       healthy host.
 
-### Onboarding Clarity
+### Onboarding clarity
 - [x] The `--help` text names every probe so the operator knows
       what `daemon=`, `bonds_count=`, `keys_*_mode=` mean before
       running the command.
 - [x] The `key=value` format mirrors the existing `syauth status`
       labelled-line convention.
 
-### Production-Ready Defaults
+### Production-ready defaults
 - [x] Defaults match the SPEC: socket at `${XDG_RUNTIME_DIR}/syauth/auth.sock`,
       bonds at `/var/lib/syauth/bonds.toml`, keys at
       `/var/lib/syauth/keys/`, audit log at `/var/lib/syauth/last.log`.
 - [x] No `--bond-dir` / `--socket` flags are required for the
       operator-typical case.
 
-### Golden Path Quality
-- [x] Phase 1 (happy path) prints `doctor=ok`; integration test
+### Success path checks
+- [x] Phase 1 (success path) prints `doctor=ok`; integration test
       `reports_daemon_up_when_socket_responds` pins it.
 - [x] The summary token is one of `ok | warn | fail`; no other
       values.
 
-### Decision Load
+### Decision load
 - [x] One subcommand, one optional `--json` flag. No mode-toggles,
       no per-probe enable/disable.
 - [x] The `--socket` override is present for the SSH-session edge
       case but not required.
 
-### Progressive Complexity
+### Progressive complexity
 - [x] Default mode is greppable lines; `--json` is opt-in for
       tooling.
-- [x] No verbose / quiet modes — every probe always emits its line.
+- [x] No verbose / quiet modes, every probe always emits its line.
 
-### Error Quality
+### Error quality
 - [x] `daemon=down: <reason>` names the reason explicitly
       (`socket-missing`, `connect-refused`, `frame-error`,
       `timeout`) so the operator can act without re-running with
@@ -303,15 +299,15 @@ its key=value lines.
 - [x] `keys_*_mode=0644 (expected 0600)` names the expected value
       so the operator doesn't have to look it up.
 
-### Failure Safety
+### Failure safety
 - [x] Doctor is read-only by contract: no `mkdir`, no `chmod`, no
       writes anywhere. Recoverable from a borked install because
       it never modifies state.
 - [x] `--json` mode parses cleanly even if every probe fails; the
       schema is total over its variants.
 
-### Runtime Transparency
-- [x] Nine `key=value` lines plus a summary — every probe's
+### Runtime transparency
+- [x] Nine `key=value` lines plus a summary, every probe's
       outcome is visible.
 - [x] No hidden state: the doctor's only side effect is writes to
       `stdout`.
@@ -321,59 +317,59 @@ its key=value lines.
       isolates a single line for dashboards.
 - [x] `--json` mode emits the same data for structured consumers.
 
-### Cross-Surface Consistency
+### Consistency across interfaces
 - [x] Uses the same `DEFAULT_BONDS_FILE`, `DEFAULT_KEYS_DIR`, and
       `DEFAULT_AUDIT_LOG_FILE` paths as the daemon, so the doctor
       and the daemon agree on what to inspect.
 
-### Workflow Consistency
+### Workflow consistency
 - [x] Subcommand placement mirrors `syauth status` (sibling),
       `syauth list`, `syauth pair`.
 - [x] `--help` snapshot is committed alongside the other
       subcommand `--help` snapshots in `tests/snapshots/`.
 
-### Change Safety
+### Change safety
 - [x] Doctor never writes to the host; the operator can re-run
       it freely between probes.
 - [x] `--json` output is a stable schema (typed via `serde_json`).
 
-### Experimentation Safety
+### Experimentation safety
 - [x] Doctor is safe to run in CI, on a stranger's machine, on a
       production host: no writes, no DBus permissions required
       (DBus failure folds into `unknown`).
 
-### Interaction Latency
+### Interaction latency
 - [x] Wall-clock target: < 1 s on a healthy host. The 50 ms
       socket connect timeout dominates the daemon-down case;
       everything else is local filesystem.
 
-### Developer Feedback Speed
-- [x] Tests pin the three load-bearing probes:
+### Developer feedback speed
+- [x] Tests pin the three required probes:
       `reports_daemon_up_when_socket_responds`,
       `reports_daemon_down_when_socket_missing`,
       `flags_keys_file_not_0600`.
-- [x] Snapshot test pins the `--help` surface; a clap regression
+- [x] Snapshot test pins the `--help` output; a clap regression
       surfaces as a snapshot diff.
 
-### Team Scale
+### Team scale
 - [x] Snapshot files are committed alongside source; team-wide
-      help surface is version-controlled.
+      help output is version-controlled.
 - [x] `--json` output is a stable contract for ops tooling.
 
-### System Scale
+### System scale
 - [x] The probe set is fixed; adding a probe is one new
       `key=value` line, no architectural change.
 - [x] Per-key probes scale linearly with the bond count (and
       sort, so output stays deterministic).
 
-### Right Behavior by Default
+### Right behavior by default
 - [x] Every probe failure downgrades the summary; the operator
       cannot accidentally read `doctor=ok` when something is
       broken.
 - [x] No `--ignore-bluez-errors` flag; doctor is conservative by
       construction.
 
-### Anti-Bypass Design
+### Anti-bypass design
 - [x] Per-key mode check cannot be silenced; a `0644` keys file
       always shows up in the output.
 - [x] The summary token is computed from the probes, not from a
@@ -383,66 +379,66 @@ its key=value lines.
 
 ### TC-01: `reports_daemon_up_when_socket_responds`
 
-**Given** a fake daemon listening on a tempdir Unix socket that
+Given a fake daemon listening on a tempdir Unix socket that
 echoes back `Response::Status { peers: [], started_at: now }` to
 any `Request::Status`.
-**When** `syauth doctor --socket <tempdir>/auth.sock` runs.
-**Then** stdout contains the literal line `daemon=up` and the
+When `syauth doctor --socket <tempdir>/auth.sock` runs.
+Then stdout contains the literal line `daemon=up` and the
 summary line is `doctor=ok`.
 
 ### TC-02: `reports_daemon_down_when_socket_missing`
 
-**Given** a `--socket` path under a tempdir that does not exist.
-**When** `syauth doctor --socket <tempdir>/no-such.sock` runs.
-**Then** stdout contains `daemon=down: socket-missing` (or
+Given a `--socket` path under a tempdir that does not exist.
+When `syauth doctor --socket <tempdir>/no-such.sock` runs.
+Then stdout contains `daemon=down: socket-missing` (or
 similar reason token starting with `socket-missing`) and the
 summary line is `doctor=fail`.
 
 ### TC-03: `flags_keys_file_not_0600`
 
-**Given** a tempdir keys directory containing one
+Given a tempdir keys directory containing one
 `<peer_id>.bin` file with mode `0o644`.
-**When** `syauth doctor --keys-dir <tempdir>` runs.
-**Then** stdout contains a line of the form
+When `syauth doctor --keys-dir <tempdir>` runs.
+Then stdout contains a line of the form
 `keys_<peer_id>_mode=0644 (expected 0600)` and the summary line
 is `doctor=warn`.
 
 ### TC-04: `doctor_help_snapshot`
 
-**Given** the `syauth doctor --help` invocation.
-**When** captured via `assert_cmd`.
-**Then** `insta::assert_snapshot!` against
+Given the `syauth doctor --help` invocation.
+When captured via `assert_cmd`.
+Then `insta::assert_snapshot!` against
 `tests/snapshots/cli__doctor_help_snapshot.snap` matches the
-committed surface (any clap-derived shape change requires a
+committed output (any clap-derived shape change requires a
 conscious `cargo insta accept`).
 
 ### TC-05: `json_mode_emits_typed_object`
 
-**Given** a tempdir socket / bonds / keys (all valid) and the
+Given a tempdir socket / bonds / keys (all valid) and the
 `--json` flag.
-**When** `syauth doctor --json` runs.
-**Then** stdout parses as a JSON object with keys `daemon_socket`,
+When `syauth doctor --json` runs.
+Then stdout parses as a JSON object with keys `daemon_socket`,
 `daemon`, `bonds_file`, `keys`, `bluez_adapter`, `systemctl`,
 `last_log_tail`, `xdg_runtime_dir`, `summary`; `summary` is one
 of `"ok"`, `"warn"`, `"fail"`.
 
 ### TC-06: `xdg_runtime_dir_unset_uses_fallback`
 
-**Given** the doctor is invoked with `XDG_RUNTIME_DIR` unset (and
+Given the doctor is invoked with `XDG_RUNTIME_DIR` unset (and
 `--socket` not passed).
-**When** the `xdg_runtime_dir` probe emits.
-**Then** stdout contains `xdg_runtime_dir=unset (fallback
+When the `xdg_runtime_dir` probe emits.
+Then stdout contains `xdg_runtime_dir=unset (fallback
 /run/user/<uid>)` and the summary line is at least `warn`.
 
 ### TC-07: `last_log_tail_caps_at_ten_lines`
 
-**Given** a `--audit-log` file with 25 lines.
-**When** doctor runs.
-**Then** `last_log_tail_1=...` through `last_log_tail_10=...`
+Given a `--audit-log` file with 25 lines.
+When doctor runs.
+Then `last_log_tail_1=...` through `last_log_tail_10=...`
 appear (the most recent 10 lines), and no
 `last_log_tail_11` line is emitted.
 
-## Acceptance Criteria (verbatim from ROADMAP DoD)
+## Acceptance criteria (verbatim from ROADMAP DoD)
 
 - [x] `syauth doctor` subcommand exists.
 - [x] `syauth doctor --json` emits a typed JSON object for tooling.
@@ -458,9 +454,9 @@ appear (the most recent 10 lines), and no
 
 ## Implementation
 
-**New production module:**
-- `crates/syauth-cli/src/doctor.rs` — the entire `doctor` subcommand
-  surface: `DoctorOpts` (clap), `DoctorReport`, `DaemonState`,
+New production module.
+- `crates/syauth-cli/src/doctor.rs`, the entire `doctor` subcommand
+  API: `DoctorOpts` (clap), `DoctorReport`, `DaemonState`,
   `BondsReport`, `KeysReport`, `KeyFileReport`, `XdgRuntimeDirReport`,
   `DoctorError`, `run_doctor`, `build_report`, `write_keyvalue`,
   `write_json`, and the named constants `DEFAULT_BONDS_FILE`,
@@ -474,56 +470,56 @@ appear (the most recent 10 lines), and no
   suppressed, any failure folds to `"unknown"`) →
   `probe_audit_log_tail` (capped at 10 lines, defensive ceiling
   4096) → `compute_summary`.
-- `crates/syauth-cli/src/lib.rs` — `pub mod doctor`.
-- `crates/syauth-cli/src/main.rs` — new clap variant `Cmd::Doctor`
+- `crates/syauth-cli/src/lib.rs`, `pub mod doctor`.
+- `crates/syauth-cli/src/main.rs`, new clap variant `Cmd::Doctor`
   and `run_doctor_cli` dispatcher.
-- `crates/syauth-cli/Cargo.toml` — added `serde`, `serde_json`,
+- `crates/syauth-cli/Cargo.toml`, added `serde`, `serde_json`,
   `syauth-presenced`, `nix` (production deps) and `serde_json` (dev
   dep). All four crates already live in `Cargo.lock` so no new
-  transitive surface.
+  transitive dependencies.
 
-**New tests:**
-- `crates/syauth-cli/tests/doctor_flow.rs` — four integration
+New tests.
+- `crates/syauth-cli/tests/doctor_flow.rs`, four integration
   tests:
-  - `reports_daemon_up_when_socket_responds` (TC-01) — fake daemon
+  - `reports_daemon_up_when_socket_responds` (TC-01), fake daemon
     on a tempdir Unix socket responds to `Request::Status`; asserts
     `daemon=up`.
-  - `reports_daemon_down_when_socket_missing` (TC-02) — non-existent
+  - `reports_daemon_down_when_socket_missing` (TC-02), non-existent
     socket; asserts `daemon=down`, `socket-missing`, `doctor=fail`.
-  - `flags_keys_file_not_0600` (TC-03) — tempdir keys file with
+  - `flags_keys_file_not_0600` (TC-03), tempdir keys file with
     mode 0644; asserts the per-peer mode line includes
     `(expected 0600)` and the summary downgrades to `doctor=warn`.
-  - `json_mode_emits_typed_object` (TC-04) — `--json` output parses
+  - `json_mode_emits_typed_object` (TC-04), `--json` output parses
     as a JSON object with the documented top-level keys and a
     `summary` token in `{ok, warn, fail}`.
-- `crates/syauth-cli/tests/cli.rs` — new `doctor_help_snapshot`
-  test pinning the `--help` surface.
+- `crates/syauth-cli/tests/cli.rs`, new `doctor_help_snapshot`
+  test pinning the `--help` output.
 
-**New snapshots:**
-- `crates/syauth-cli/tests/snapshots/cli__doctor_help_snapshot.snap`
-  — pins the `syauth doctor --help` surface.
+New snapshots.
+- `crates/syauth-cli/tests/snapshots/cli__doctor_help_snapshot.snap`,
+pins the `syauth doctor --help` output.
 - `crates/syauth-cli/tests/snapshots/cli__help_snapshot.snap`
-  (UPDATED) — adds the `doctor` line to the top-level command list.
+  (UPDATED), adds the `doctor` line to the top-level command list.
 
-**In-module unit tests (10) cover:**
+In-module unit tests (10) cover.
 - `key_file_peer_id_strips_bin_suffix`,
-  `key_file_peer_id_rejects_non_bin` — file-name parser.
+  `key_file_peer_id_rejects_non_bin`, file-name parser.
 - `probe_keys_flags_0644_file_as_not_ok`,
-  `probe_keys_sorts_files_by_peer_id` — keys-dir probe.
-- `default_socket_path_appends_syauth_auth_sock` — SPEC §3
+  `probe_keys_sorts_files_by_peer_id`, keys-dir probe.
+- `default_socket_path_appends_syauth_auth_sock`, SPEC §3
   socket-path default.
-- `compute_summary_is_{fail,warn,ok}_*` — summary state machine.
-- `probe_audit_log_tail_caps_at_ten` — log-tail cap.
-- `write_keyvalue_emits_summary_token` — renderer ends with the
+- `compute_summary_is_{fail,warn,ok}_*`, summary state machine.
+- `probe_audit_log_tail_caps_at_ten`, log-tail cap.
+- `write_keyvalue_emits_summary_token`, renderer ends with the
   `doctor=<summary>\n` line.
 
-**Closure evidence:**
+Closure evidence.
 
-- `cargo test -p syauth-cli --test doctor_flow` — 4 passed, 0 failed
+- `cargo test -p syauth-cli --test doctor_flow`, 4 passed, 0 failed
   (the verbatim closure-condition probe from ROADMAP).
 - `cargo test -p syauth-cli` totals: 142 passed, 0 failed, 3 ignored.
-- `make scope-discipline` — exit 0 ("Scope-discipline grep clean.").
-- `make lint` — green; clippy, fmt, audit, deny all pass.
+- `make scope-discipline`, exit 0 ("Scope-discipline grep clean.").
+- `make lint`, green; clippy, fmt, audit, deny all pass.
 - `make test` workspace totals: 402 passed, 0 failed, 8 ignored
   (the ignored set is the pre-existing radio-gated DEV-004 + smoke
   rows; no new ignored tests added by S-016).

@@ -7,12 +7,13 @@ description: Create decomposed roadmap from specification
 
 <constraints>
 Do not run git commands. All version control is handled by the user.
-Follow the persona and contracts defined in AGENTS.md.
+Follow the repository specifications and documented contribution checks.
 </constraints>
 
 
 <role>
-You are an experienced 15+ years Rust developer who also has 10+ years of experience building AI agents and knows all AI agent patterns. You value SOLID, DRY, KISS, clean architecture, and idiomatic Rust. You follow Rust project structure standards and always write Rust edition 2024 code.
+You implement syauth with idiomatic Rust edition 2024. Use standard Rust project
+structure, remove duplicate code, and keep each module responsible for one task.
 </role>
 
 
@@ -40,11 +41,11 @@ Rules for writing the roadmap:
 
 Put roadmaps in `specs/`.
 
-## Update Mode
+## Update mode
 
 When a roadmap already exists in specs/ (user says "update roadmap" or "re-sync roadmap"):
 1. Read the existing roadmap and note completed items
-2. Analyze the current codebase to verify completion status — check that tests exist and pass for items marked done
+2. Analyze the current codebase to verify completion status, check that tests exist and pass for items marked done
 3. Re-read the original spec to check for new requirements or changes since the roadmap was created
 4. Update the roadmap:
    - Mark completed items as done with evidence (test file, implementation file)
@@ -53,26 +54,26 @@ When a roadmap already exists in specs/ (user says "update roadmap" or "re-sync 
    - Update DoD/DoR based on what has been learned during implementation
 5. Write a changelog section at the bottom of the roadmap noting what changed and why
 
-When updating, preserve the existing roadmap structure. Do not rewrite completed items — only update their status and add evidence links.
+When updating, preserve the existing roadmap structure. Do not rewrite completed items, only update their status and add evidence links.
 
 <example title="One roadmap item">
 
-### Step 3: Ecosystem-Specific Config Fields
+### Step 3: ecosystem-specific config fields
 
-**Description:** Add Rust-specific fields (edition, unsafe_policy) and Zig-specific fields (zig_version, link_libc) to the config struct, with validation per ecosystem.
+Description. Add Rust-specific fields (edition, unsafe_policy) and Zig-specific fields (zig_version, link_libc) to the config struct, with validation per ecosystem.
 
-**DoR (Definition of Ready):**
+DoR (Definition of Ready).
 - Multi-ecosystem config spec is reviewed and approved
 - Steps 1-2 are complete (ecosystem validation and template directory selection work)
 
-**DoD (Definition of Done):**
+DoD (Definition of Done).
 - [ ] Config struct includes RustEdition, UnsafePolicy, ZigVersion, LinkLibc fields
 - [ ] Validation rejects invalid values (e.g., unknown Rust edition)
 - [ ] Fields are ignored when ecosystem doesn't match (Go config ignores Rust fields)
 - [ ] Unit tests cover all validation paths
 - [ ] `make test` and `make lint` pass
 
-**Files likely affected:** `internal/config/config.go`, `internal/config/config_test.go`, `internal/config/fieldmap.go`
+Files likely affected. `internal/config/config.go`, `internal/config/config_test.go`, `internal/config/fieldmap.go`
 
 </example>
 
@@ -81,7 +82,7 @@ When updating, preserve the existing roadmap structure. Do not rewrite completed
 Before finalizing the roadmap, verify:
 
 - Can each item be tested independently without completing later items?
-- Does every item deliver value on its own — not just "set up for the next step"?
+- Does every item have a useful result on its own?
 - Are there circular dependencies between items?
 - Does the first item have zero prerequisites beyond the current codebase?
 - Is every DoD concrete and verifiable (not vague like "works correctly")?

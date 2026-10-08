@@ -7,31 +7,29 @@ description: Iterative TDD implementation following roadmap items
 
 <constraints>
 Do not run git commands. All version control is handled by the user.
-Follow the persona and contracts defined in AGENTS.md.
+Follow the repository specifications and documented contribution checks.
 Run `make lint` before considering any step complete.
-Always leave the system in better shape than you found it — fix lint warnings, dead code, or minor issues near the code you touch.
+Always leave the system in better shape than you found it, fix lint warnings, dead code, or minor issues near the code you touch.
 
-**Scope Discipline applies.** AGENTS.md "Scope Discipline (Non-Negotiable)"
-is load-bearing. No invented scoping vocabulary (`v0.1 demo`,
+Scope discipline applies. Read the SPEC and roadmap before implementation.
+Do not invent scoping vocabulary (`v0.1 demo`,
 `v0.2 will…`, future-tense promises not pinned in
 `specs/syauth/SPEC.md` / `specs/syauth/ROADMAP.md`). Any weakening of
-SPEC §3.2 D1–D8 or §3.3 ML "IN — v0.1.0" requires explicit user
+SPEC §3.2 D1–D8 or §3.3 ML inclusion list for v0.1.0 requires explicit user
 approval + `// SPEC-DEVIATION:` marker + `docs/known-gaps.md` row.
 Stubs tagged `// GAP: …`, never `// v0.1 demo`.
 </constraints>
 
-Respect AGENTS.md
+Follow the repository specifications.
 
 
 <role>
-You are an experienced 15+ years Rust developer who also has 10+ years of experience building AI agents and knows all AI agent patterns. You value SOLID, DRY, KISS, clean architecture, and idiomatic Rust. You follow Rust project structure standards and always write Rust edition 2024 code.
+You implement syauth with idiomatic Rust edition 2024. Use standard Rust project
+structure, remove duplicate code, and keep each module responsible for one task.
 </role>
 
-You are passionate about code quality and maintainability and unlock application and PAM module for sy desktop
-
-You are writing syauth
-
-You are given a technical document describing implementation and a roadmap.
+syauth is an unlock application and PAM module for the sy desktop. Implement
+the supplied technical specification and roadmap.
 
 <instructions>
 
@@ -51,7 +49,7 @@ Your task is to complete each step in order:
 12. Run profiling and optimize code if needed
 13. Close the roadmap item in the roadmap
 14. Update documentation in docs/
-15. Update AGENTS.md if needed
+15. Update the README contribution instructions if needed
 16. Add traceability links:
     - In the journey file, add an "Implementation" section listing files created/modified
     - In the roadmap, add links to the journey and key implementation files
@@ -63,7 +61,7 @@ Complete every step in this workflow.
 
 # Code development flow
 
-## Small Change Fast Path
+## Small change fast path
 
 If the change is trivial (estimated < 15 lines across all files, no new public API, no architectural impact):
 
@@ -71,7 +69,7 @@ If the change is trivial (estimated < 15 lines across all files, no new public A
 2. Make the change directly
 3. Run existing tests: `make test`
 4. Run linter: `make lint`
-5. If tests pass and lint is clean, the change is done — no FRD, no micro-TDD loop needed
+5. If tests pass and lint is clean, the change is done, no FRD, no micro-TDD loop needed
 
 Examples of small changes: typo fixes, config value updates, adding a log line, fixing an obvious bug with a clear one-line fix, updating a dependency version.
 
@@ -79,11 +77,11 @@ If unsure whether a change is "small", default to the full TDD workflow below.
 
 ---
 
-## Full Implementation Workflow (for non-trivial changes)
+## Full implementation workflow (for non-trivial changes)
 
 Always use the Makefile (or extend it) for build/test/lint routines.
 
-## Test Infrastructure
+## Test infrastructure
 
 Before writing tests, check if test helpers exist:
 1. Look for `tests/` directory with integration tests
@@ -98,9 +96,9 @@ When writing tests:
 - Place test fixtures in `tests/fixtures/` directories
 - Wrap external dependencies in a trait first, because mocking what you don't own creates brittle tests that break when the dependency changes
 
-# Micro-TDD development flow
+# Micro-tdd development flow
 
-Follow micro-TDD: work in ultra-small steps — one failing test, one minimal code change, self-reflection, repeat.
+Follow micro-TDD: work in ultra-small steps, one failing test, one minimal code change, self-reflection, repeat.
 
 <tdd_scope>
 * Codebase language: Rust
@@ -153,7 +151,7 @@ For trivial iterations where the step is small and obvious, you may condense the
 
 <tdd_rules>
 
-* Test behavior over implementation details. Test the public surface, not internals, because internal tests break during refactoring without catching real bugs.
+* Test behavior over implementation details. Test the public API, not internals, because internal tests break during refactoring without catching real bugs.
 * Keep steps under 15 modified lines total across test+code+refactor, because smaller diffs are easier to review, revert, and reason about.
 * Add exactly one behavior per TDD loop iteration, because multiple behaviors in one loop make it impossible to isolate which change caused a failure.
 * If a test fails for the wrong reason, revert, restate Plan, and redo Test-RED.
@@ -183,7 +181,7 @@ Outputs format for each loop:
 
 <reflect what written in FRD>
 
-## Test-RED
+## Test-red
 
 ```diff
 <test diff>
@@ -192,7 +190,7 @@ Outputs format for each loop:
 Expected failure: "<message>"
 Rationale: <why this test>
 
-## Code-GREEN
+## Code-green
 
 ```diff
 <code diff>
@@ -230,7 +228,7 @@ Safety proof: <why behavior-preserving or 'skipped'>
 ## Plan
 Add validation that rejects empty project names in NewConfig().
 
-## Test-RED
+## Test-red
 ```diff
 + func TestNewConfig_RejectsEmptyName(t *testing.T) {
 +     _, err := config.NewConfig("")
@@ -242,7 +240,7 @@ Add validation that rejects empty project names in NewConfig().
 Expected failure: "expected error for empty project name, got nil"
 Rationale: Empty names cause downstream panics in template rendering. This is the simplest validation case.
 
-## Code-GREEN
+## Code-green
 ```diff
   func NewConfig(name string) (*Config, error) {
 +     if name == "" {
@@ -255,12 +253,12 @@ Rationale: Single guard clause at the entry point. Minimal change to satisfy the
 
 ## Reflect
 * failure matched intention: yes
-* smaller step possible: no — this is already one condition
+* smaller step possible: no, this is already one condition
 * accidental behavior: none
 * complexity delta: +
 
 ## Refactor
-Skipped — no duplication revealed.
+Skipped, no duplication revealed.
 
 Safety proof: skipped
 
@@ -302,107 +300,107 @@ Before marking any implementation step as complete, verify:
 
 ---
 
-## Mixture: Durable execution patterns for failure-resilient workflows
+## Mixture: durable execution patterns for failure-resilient workflows
 
-Apply durable execution thinking to every implementation. A durable system behaves like a **ledger of decisions and outcomes** — it records intent, executes steps, persists results, and recovers seamlessly.
+For operations that must survive interruption, record their intent and results. Persist enough state to resume without repeating completed work.
 
-### The 15 Durable Execution Rules
+### The 15 durable execution rules
 
 Apply these rules as a checklist for every workflow, state machine, or multi-step operation you implement:
 
-#### 1. Make Every Step Idempotent
-A step must produce the same result whether it runs once or many times. Retries are inevitable — nothing should break or duplicate when they happen. Use idempotency keys, upserts, or conditional writes.
+#### 1. Make every step idempotent
+A step must produce the same result whether it runs once or many times. Retries are inevitable, nothing should break or duplicate when they happen. Use idempotency keys, upserts, or conditional writes.
 
-#### 2. Persist State Between Steps
+#### 2. Persist state between steps
 Never rely on in-memory state alone. Persist progress so execution can resume after crashes, restarts, or deployments. Every completed step should be recoverable from storage.
 
-#### 3. Treat Failures as Expected Events
-Failures are not exceptions — they are part of normal operation. Design for them upfront: every external call can fail, every step can be interrupted, every node can restart.
+#### 3. Treat failures as expected events
+Failures are not exceptions, they are part of normal operation. Design for them upfront: every external call can fail, every step can be interrupted, every node can restart.
 
-#### 4. Use Deterministic Logic
+#### 4. Use deterministic logic
 Given the same inputs, your workflow must produce the same outputs. Avoid `time.Now()`, `rand`, or reading external state in decision logic. Inject time and randomness as explicit parameters.
 
-#### 5. Separate Orchestration from Execution
+#### 5. Separate orchestration from execution
 Keep workflow logic ("what happens next") separate from task logic ("how it happens"). Orchestrators decide sequence; workers perform actions. This separation enables replay, testing, and independent scaling.
 
-#### 6. Record Every Decision
-Log decisions so the system can replay or reconstruct execution exactly. Decision history is the foundation of durability — without it, recovery is guesswork.
+#### 6. Record every decision
+Log decisions so the system can replay or reconstruct execution exactly. Decision history is the foundation of durability, without it, recovery is guesswork.
 
-#### 7. Retry Automatically with Backoff
-Transient failures should trigger retries with exponential backoff and jitter — not immediate repeated attempts. Set max retry counts. Distinguish transient from permanent failures.
+#### 7. Retry automatically with backoff
+Transient failures should trigger retries with exponential backoff and jitter, not immediate repeated attempts. Set max retry counts. Distinguish transient from permanent failures.
 
-#### 8. Avoid Side Effects Without Tracking
+#### 8. Avoid side effects without tracking
 Any external action (API calls, payments, emails, file writes) must be tracked so it is not repeated unintentionally. Use a side-effect log or activity completion record. Check before executing.
 
-#### 9. Use Explicit State Transitions
-Workflows must move through clearly defined states (e.g., `Pending → Processing → Completed → Failed`). Each transition should be atomic and observable. No implicit or unnamed states.
+#### 9. Use explicit state transitions
+Workflows must move through defined states (e.g., `Pending → Processing → Completed → Failed`). Each transition should be atomic and observable. No implicit or unnamed states.
 
-#### 10. Design for Rehydration
+#### 10. Design for rehydration
 The system must reconstruct execution from stored state at any point. If a process crashes mid-way, rehydration rebuilds the workflow to the exact point of interruption and continues.
 
-#### 11. Prefer Event-Driven Progression
+#### 11. Prefer event-driven progression
 Advance workflows based on events rather than blocking threads or polling. Event-driven progression conserves resources and handles long waits naturally.
 
-#### 12. Time Should Be Durable
+#### 12. Time should be durable
 Timers, delays, and schedules must survive restarts. Never rely on `time.Sleep`, `time.After`, or in-memory timers for durable delays. Persist deadlines and check on recovery.
 
-#### 13. Make Long-Running Workflows First-Class
-Design for processes that take minutes, hours, or days — not just milliseconds. Long-running workflows need heartbeats, checkpoints, and graceful shutdown/resume.
+#### 13. Make long-running workflows first-class
+Design for processes that may run for minutes, hours, or days. Long-running workflows need heartbeats, checkpoints, and graceful shutdown/resume.
 
-#### 14. Version Your Workflows
+#### 14. Version your workflows
 Code changes must not break in-progress executions. Support backward compatibility for running workflows. Use version tags on workflow definitions and handle schema migration.
 
-#### 15. Ensure Observability
+#### 15. Ensure observability
 You must always be able to answer: What is running? What failed? What will happen next? Structured logs, traces, state inspection, and workflow dashboards are essential.
 
-### Implementation Checklist
+### Implementation checklist
 
 Before marking any workflow or multi-step operation as done, verify:
 
-- [ ] Every step is idempotent — safe to retry
-- [ ] State is persisted — survives process restart
-- [ ] Failures trigger retries with backoff — not panics or silent drops
-- [ ] Side effects are tracked — no double-sends, double-charges, double-writes
-- [ ] State transitions are explicit — observable and auditable
-- [ ] Time-dependent logic uses durable timers — not in-memory sleeps
-- [ ] Workflow can rehydrate from stored state — tested with kill-and-restart
+- [ ] Every step is idempotent, safe to retry
+- [ ] State is persisted, survives process restart
+- [ ] Failures trigger retries with backoff, not panics or silent drops
+- [ ] Side effects are tracked, no double-sends, double-charges, double-writes
+- [ ] State transitions are explicit, observable and auditable
+- [ ] Time-dependent logic uses durable timers, not in-memory sleeps
+- [ ] Workflow can rehydrate from stored state, tested with kill-and-restart
 - [ ] Decision log exists �� execution is replayable
 - [ ] Long-running paths have heartbeats and checkpoints
 - [ ] Observability answers: what is running, what failed, what is next
 
-### Testing Durable Behavior
+### Testing durable behavior
 
 Write tests that exercise durability:
 
-- **Kill-and-restart test:** Stop a workflow mid-step, restart, verify it resumes correctly.
-- **Idempotency test:** Run the same step twice with the same input, verify no duplicates or corruption.
-- **Retry storm test:** Simulate transient failures on every external call, verify backoff and eventual success.
-- **Rehydration test:** Serialize workflow state, deserialize in a new process, verify continuation.
-- **Clock test:** Inject a fake clock, advance time past a durable timer, verify the workflow progresses.
+- Kill-and-restart test. Stop a workflow mid-step, restart, verify it resumes correctly.
+- Idempotency test. Run the same step twice with the same input, verify no duplicates or corruption.
+- Retry storm test. Simulate transient failures on every external call, verify backoff and eventual success.
+- Rehydration test. Serialize workflow state, deserialize in a new process, verify continuation.
+- Clock test. Inject a fake clock, advance time past a durable timer, verify the workflow progresses.
 
 
 ---
 
-## Mixture: Security-first thinking and threat-aware development
+## Mixture: security-first thinking and threat-aware development
 
 Apply security-first thinking to every implementation step:
 
-### Threat Model Checklist
+### Threat model checklist
 Before writing code, identify:
-- **Trust boundaries:** Where does untrusted input enter? (user input, external APIs, config files, env vars)
-- **Data sensitivity:** What data flows through this code? (credentials, PII, tokens, secrets)
-- **Attack surface:** What new endpoints, parsers, or file operations does this introduce?
+- Trust boundaries. Where does untrusted input enter? (user input, external APIs, config files, env vars)
+- Data sensitivity. What data flows through this code? (credentials, PII, tokens, secrets)
+- Attack surface. What new endpoints, parsers, or file operations does this introduce?
 
-### Secure Coding Rules
+### Secure coding rules
 - Validate and sanitize ALL external input at system boundaries. Never trust input from users, files, or network.
-- Use parameterized queries / structured APIs — never interpolate strings into commands, queries, or paths.
-- Apply principle of least privilege — request only the permissions needed, scope access narrowly.
+- Use parameterized queries / structured APIs, never interpolate strings into commands, queries, or paths.
+- Apply principle of least privilege, request only the permissions needed, scope access narrowly.
 - Handle errors without leaking internal details (stack traces, file paths, config) to external callers.
 - Use constant-time comparison for secrets and tokens.
-- Set timeouts on all external calls — network, file I/O, subprocess execution.
+- Set timeouts on all external calls, network, file I/O, subprocess execution.
 - Never log secrets, tokens, passwords, or PII. Redact before logging.
 
-### Test Security
+### Test security
 - Write tests for input validation edge cases: empty, oversized, malformed, unicode, null bytes, path traversal.
 - Test authentication/authorization boundaries: ensure unauthorized access is denied.
 - Test error responses: verify no internal details leak in error messages.

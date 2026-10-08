@@ -12,6 +12,14 @@ the same nonce. The cancellation carries the same bond-key BLAKE3 MAC as the
 challenge. Android verifies the complete frame through UniFFI before acting
 on its payload. Unknown payloads and failed verification are ignored.
 
+Each new request automatically opens the strong biometric prompt when the approval
+Activity first resumes. No extra Authorize tap is required. Dismissing biometrics
+returns to the pending Authorize/Disallow screen without sending a denial or
+reopening the prompt automatically. Authorize retries biometrics; Disallow rejects
+the request. The desktop deadline still applies while this screen is visible.
+Cancellation received before the Activity launches prevents it from opening
+biometrics.
+
 Cancellation matches both the bonded peer and the current request nonce. It
 cancels the BiometricPrompt, closes the approval activity, and suppresses late
 biometric callbacks. It never signs a frame or grants authentication. The most
@@ -24,9 +32,10 @@ An optional `pam_echo.so` message before `pam_syauth.so` tells KDE that the
 biometric service presented a prompt. Keep existing mandatory checks and the
 existing laptop fingerprint fallback.
 
-Validation: `challenge_flow` exercises real Unix-socket EOF, verifies the
+`challenge_flow` tests real Unix-socket EOF, verifies the
 cancellation nonce and MAC, then authenticates another challenge. Android
 activity tests cover cancellation during biometrics, a late success callback,
 wrong nonce, failed verification, and cancellation before activity launch.
 
-Bug: [Pending approval survives password unlock](../specs/bugs/BUG-2026-10-08-cancel-approval.md).
+The original bug is documented in
+[Pending approval survives password unlock](../specs/bugs/BUG-2026-10-08-cancel-approval.md).

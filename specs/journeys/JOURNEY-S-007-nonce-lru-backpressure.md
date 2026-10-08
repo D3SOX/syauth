@@ -1,6 +1,6 @@
-# JOURNEY-S-007: Nonce LRU + per-peer backpressure + queue deadline
+# JOURNEY-S-007: nonce LRU + per-peer backpressure + queue deadline
 
-> **Spec anchors:** `specs/unlock-proximity/SPEC.md` §3 Scope item #7
+> Spec anchors. `specs/unlock-proximity/SPEC.md` §3 Scope item #7
 > ("Backpressure: at most one in-flight challenge per peer; the
 > daemon queues subsequent challenges with a 1 s queue deadline");
 > §6 Idempotency ("every nonce is single-use. A replayed response
@@ -10,20 +10,20 @@
 > and "Response nonce mismatch" (permanent, likely attack →
 > `PAM_AUTH_ERR(reason=replay)`); §7 T-Daemon-DoS ("the daemon
 > caps concurrent socket accepts at 4 and rate-limits new
-> connections to 10/s per peer-credential UID" — the per-peer
+> connections to 10/s per peer-credential UID", the per-peer
 > `Semaphore(1)` + 1 s queue deadline is the daemon-internal
 > companion defense, scoped to a single peer's challenge stream).
 >
-> **Roadmap row:** `specs/unlock-proximity/ROADMAP.md` Step S-007.
+> Roadmap row. `specs/unlock-proximity/ROADMAP.md` Step S-007.
 >
-> **Closure condition (verbatim from ROADMAP.md):**
+> Closure condition (verbatim from ROADMAP.md).
 >
 > ```
 > cargo test -p syauth-presenced --test replay --test backpressure
 > # all three tests pass
 > ```
 
-## Roadmap Link
+## Roadmap link
 
 - Source roadmap: [specs/unlock-proximity/ROADMAP.md](../unlock-proximity/ROADMAP.md) Step S-007.
 - Feature: extend the S-006 `Orchestrator` with (a) a per-peer
@@ -40,15 +40,15 @@
 
 ## 1. Journey
 
-When **the operator triggers two near-simultaneous `sudo` calls
+When the operator triggers two near-simultaneous `sudo` calls
 against the same bonded peer (concurrent shells, automation script,
 attacker probing the daemon) or when an attacker replays a
 previously-captured `(challenge, response)` pair on the bonded
-peer's response characteristic**, I want to **see the daemon's
+peer's response characteristic, I want to see the daemon's
 orchestrator (a) admit only one in-flight challenge per peer via
 its per-peer `Semaphore(1)`, parking the second caller until either
-the first call completes OR the 1 s `BUSY_QUEUE_DEADLINE` elapses
-— on timeout returning `ChallengeOutcome::Busy` so the PAM module
+the first call completes OR the 1 s `BUSY_QUEUE_DEADLINE` elapses,
+on timeout returning `ChallengeOutcome::Busy` so the PAM module
 fails fast and the operator falls through to FIDO without queueing
 further pressure on the BLE link, and (b) reject any response
 whose nonce was already seen for that peer by consulting the
@@ -56,7 +56,7 @@ per-peer `NonceCache` (`VecDeque<[u8; NONCE_BYTES]>`, cap 64,
 LRU-evicting the oldest entry once the 65th nonce arrives), so a
 replay attack against the response characteristic surfaces as
 `ChallengeOutcome::Replay` with an audit row carrying
-`reason="replay"`**, so I can **(a) honour SPEC §3 scope item #7
+`reason="replay"`, so I can (a) honour SPEC §3 scope item #7
 (at most one in-flight challenge per peer, 1 s queue deadline,
 `busy` reason on overflow), (b) honour SPEC §6 idempotency ("LRU
 of last 64 nonces per peer"), (c) honour SPEC §6 Failure Taxonomy
@@ -64,7 +64,7 @@ of last 64 nonces per peer"), (c) honour SPEC §6 Failure Taxonomy
 (d) honour SPEC §7 T-Daemon-DoS by capping per-peer concurrency
 without an unbounded queue, (e) keep CI radio-free by exercising
 both the replay and the busy paths against the `FakePeripheral`
-test double under `tokio::test(start_paused = true)`**.
+test double under `tokio::test(start_paused = true)`.
 
 ## 2. CJM
 
@@ -73,14 +73,14 @@ callers without any gating: two concurrent `tokio::spawn` tasks
 both notify on the same peer's challenge characteristic and both
 race on the per-peer response mpsc, producing non-deterministic
 audit rows and risking nonce-on-nonce collisions on the wire.
-There is no replay defense — an attacker who captures a valid
+There is no replay defense, an attacker who captures a valid
 `(challenge, response)` pair and replays the response bytes on the
 response characteristic before the legitimate phone responds would
 see the orchestrator verify the signature (the signature is valid
 against the challenge frame body), return `ChallengeOutcome::Ok`,
 and the audit row would show a clean `outcome=ok`. S-007 closes
 both gaps with two small additions to the per-peer state:
-(a) `Mutex<NonceCache>` — a `VecDeque<[u8; NONCE_BYTES]>` with a
+(a) `Mutex<NonceCache>`, a `VecDeque<[u8; NONCE_BYTES]>` with a
 `contains(&[u8; NONCE_BYTES]) -> bool` and `insert([u8; NONCE_BYTES])`
 pair, capped at `NONCE_LRU_CAP = 64` so the oldest nonce is
 evicted via `pop_front` when the 65th is inserted; (b)
@@ -92,9 +92,9 @@ timeout returns `ChallengeOutcome::Busy`. The nonce check runs
 to the verify path and an already-seen nonce short-circuits to
 `Replay`.
 
-### Phase 1: per-peer Semaphore admits at most one in-flight challenge
+### Phase 1: per-peer semaphore admits at most one in-flight challenge
 
-**User Intent:** the operator runs two `sudo` calls in two shells
+User intent. The operator runs two `sudo` calls in two shells
 near-simultaneously; both calls land on the orchestrator's
 `issue_challenge` for the same `peer_id`. The first call acquires
 the per-peer `Semaphore(1)`, sends a notify on the per-peer
@@ -107,12 +107,12 @@ reason=BUSY_REASON }`; the PAM module (S-008) maps that reason to
 `PAM_AUTHINFO_UNAVAIL` so the operator's second shell falls
 through to FIDO without piling on the phone's biometric prompt.
 
-**Actions:**
+Actions.
 
 1. The orchestrator looks up the peer's `Arc<Semaphore>` (the
    `PeerEntry::semaphore` field added by this step). Unknown peer
    short-circuits to `ChallengeOutcome::UnknownPeer` *before* any
-   semaphore work — the membership check is the orchestrator's
+   semaphore work, the membership check is the orchestrator's
    first gate, so a missing peer never starves the in-flight slot.
 2. `tokio::time::timeout(BUSY_QUEUE_DEADLINE, semaphore.acquire_owned())`
    admits the first caller within microseconds. A second caller
@@ -127,9 +127,9 @@ through to FIDO without piling on the phone's biometric prompt.
    the existing S-006 path (RNG nonce, build frame, notify, await
    response, verify, audit). The permit is held by the orchestrator
    future until the function returns; `Drop` releases it
-   automatically — no explicit `drop(permit)` is needed.
+   automatically, no explicit `drop(permit)` is needed.
 
-**Pain / Risk:**
+Pain / risk.
 
 - An unbounded queue behind the semaphore would defeat the SPEC
   §7 T-Daemon-DoS defense (an attacker who keeps connections open
@@ -140,7 +140,7 @@ through to FIDO without piling on the phone's biometric prompt.
   `CONCURRENT_ACCEPT_CAP = 4` already caps upstream.
 - A test under `tokio::test(start_paused = true)` MUST advance
   the virtual clock past `BUSY_QUEUE_DEADLINE` *while the first
-  task is parked on its own await* — `tokio::time::advance` keeps
+  task is parked on its own await*, `tokio::time::advance` keeps
   the runtime in a consistent state and lets the busy path return
   deterministically.
 - A semaphore held across an `.await` is a known footgun (the
@@ -148,10 +148,10 @@ through to FIDO without piling on the phone's biometric prompt.
   orchestrator's `issue_challenge` future holds the permit for
   the entire call, but cancellation of the future (e.g., the PAM
   caller drops the socket connection mid-call) releases the
-  permit via `Drop`, freeing the slot for the next caller — the
+  permit via `Drop`, freeing the slot for the next caller, the
   standard tokio semaphore contract.
 
-**Success Signal:** with two concurrent `issue_challenge` tasks
+Success signal. With two concurrent `issue_challenge` tasks
 spawned for the same peer under `tokio::test(start_paused = true)`,
 the first task is parked awaiting `wait_for_response` (no injected
 response), the test advances the clock by
@@ -163,7 +163,7 @@ two would not also see `Busy` once the first task drops).
 
 ### Phase 2: per-peer NonceCache rejects replayed nonces
 
-**User Intent:** an attacker who can write to the bonded peer's
+User intent. An attacker who can write to the bonded peer's
 response characteristic (e.g., via a relay rig on the BLE link, or
 a compromised companion device) replays a previously-captured
 `(challenge_frame, response_frame)` pair. The orchestrator's S-006
@@ -174,7 +174,7 @@ matches a cache entry is `Replay`; a response whose nonce is fresh
 is admitted to verify and, on success, the nonce is inserted into
 the cache before the function returns.
 
-**Actions:**
+Actions.
 
 1. Each `PeerEntry` carries a `Mutex<NonceCache>` (`tokio::sync::Mutex`
    so `issue_challenge` can `await` while holding the cache lock,
@@ -195,48 +195,47 @@ the cache before the function returns.
    log for the replayed nonce and correlate against the phone-side
    log.
 
-**Pain / Risk:**
+Pain / risk.
 
 - The replay check runs *after* the signature verify. A pre-verify
   check would let an attacker who couldn't sign still pollute the
   cache with arbitrary nonces, denying-of-service the legitimate
   user. Post-verify means only nonces with valid signatures
-  consume cache slots — the cache is a defense against
+  consume cache slots, the cache is a defense against
   signed-replay, not against signature-spam.
 - An LRU cap of 64 means an operator who runs 65 sudos in rapid
   succession overwrites the oldest cached nonce. A nonce that
   cycles back through OsRng's output stream after 64 uses has
   probability `64 / 2^128` of colliding with a legitimate fresh
-  nonce — well below the SPEC's correctness floor.
+  nonce, well below the SPEC's correctness floor.
 - The `Replay` audit row carries `nonce_hex` so an operator
   investigating an attack can `grep <nonce>` the audit log to see
   both the original `ok` row and the subsequent `replay` row for
   the same nonce.
 
-**Success Signal:** with a test that calls
+Success signal. With a test that calls
 `issue_challenge_with_nonce(peer_id, nonce_a, ..)` followed by
 `issue_challenge_with_nonce(peer_id, nonce_a, ..)` (same nonce,
 fresh signed response for each call), the first call returns
 `ChallengeOutcome::Ok`, the second returns
-`ChallengeOutcome::Replay`. The audit log has two lines —
-`outcome=ok, nonce_hex=<a>` then `outcome=replay, nonce_hex=<a>`.
+`ChallengeOutcome::Replay`. The audit log has two lines, `outcome=ok, nonce_hex=<a>` then `outcome=replay, nonce_hex=<a>`.
 A separate pure-data test on `NonceCache` directly verifies that
 inserting 65 distinct nonces evicts the first; the first
 `contains` returns `false` and the 65th `contains` returns `true`.
 
 ### Phase 3: server-side mapping and audit-line discipline
 
-**User Intent:** the new `ChallengeOutcome::Busy` and the now-real
-`ChallengeOutcome::Replay` variants surface through
+User intent. The new `ChallengeOutcome::Busy` and the now-real
+`ChallengeOutcome::Replay` variants propagate through
 `Response::Challenge { ok, signature, reason }` exactly the same
-way the S-006 variants do — typed reason string, `signature=None`,
+way the S-006 variants do, typed reason string, `signature=None`,
 `ok=false`. The PAM module (S-008) maps `reason=busy` to
 `PAM_AUTHINFO_UNAVAIL` and `reason=replay` to `PAM_AUTH_ERR`. The
 orchestrator audits every Busy and Replay outcome to
-`/var/lib/syauth/last.log` so the operator's investigation surface
+`/var/lib/syauth/last.log` so the operator's investigation log
 is unchanged.
 
-**Actions:**
+Actions.
 
 1. The `ChallengeOutcome` enum gains a `Busy` variant alongside
    the existing `Ok / Denied / Replay / BadSignature / TimedOut /
@@ -246,8 +245,8 @@ is unchanged.
    `OUTCOME_REASON_*` family for grep symmetry, and is re-exported
    from `crates/syauth-presenced/src/lib.rs`.
 3. The server's `dispatch` arm for `Request::Challenge` already
-   routes through `outcome.signature_bytes()` + `outcome.reason_str()`
-   — no change is needed beyond the orchestrator producing the
+   routes through `outcome.signature_bytes()` + `outcome.reason_str()`,
+no change is needed beyond the orchestrator producing the
    new variants.
 4. The S-006 audit-row contract is preserved: every Busy and
    every Replay outcome appends one line to the audit log before
@@ -256,7 +255,7 @@ is unchanged.
    (mirroring the S-006 design where outcome and reason converge
    on the single typed string).
 
-**Pain / Risk:**
+Pain / risk.
 
 - A `Busy` audit row with an empty `nonce_hex` would break the
   audit-line column shape (the audit row's nonce column is fixed
@@ -266,10 +265,10 @@ is unchanged.
 - The `socket_smoke` and `lifecycle_smoke` tests construct the
   server without an orchestrator and expect
   `Response::Challenge { reason="not-implemented" }`. That contract
-  is unchanged in S-007 — the new `Busy` reason is only produced
+  is unchanged in S-007, the new `Busy` reason is only produced
   when an orchestrator is wired.
 
-**Success Signal:** the `tests/backpressure.rs` test asserts the
+Success signal. The `tests/backpressure.rs` test asserts the
 second concurrent call returns `ChallengeOutcome::Busy` with
 `outcome.reason_str() == BUSY_REASON`. The `tests/replay.rs` test
 asserts the second-with-same-nonce call returns
@@ -277,7 +276,7 @@ asserts the second-with-same-nonce call returns
 OUTCOME_REASON_REPLAY`. Direct unit assertions on `NonceCache`
 verify the LRU semantics at the data-structure level.
 
-### Friction and Opportunity
+### Friction and opportunity
 
 | Friction | Phase | Opportunity |
 |----------|-------|-------------|
@@ -288,7 +287,7 @@ verify the LRU semantics at the data-structure level.
 | The S-006 `FakePeripheral::wait_for_response` polls every 10 ms; under `start_paused = true` the polling itself does not consume virtual time so an unbounded wait would hang | 1 | The test forces the first call to park on `wait_for_response` (no injected response), then advances the clock by `BUSY_QUEUE_DEADLINE + ε`; only the second task resolves (to `Busy`); the first task remains parked until the test drops it |
 | Calling `issue_challenge` always with a fresh OsRng nonce makes the replay test unreachable | 2 | A test-only entry point `issue_challenge_with_nonce(peer_id, nonce, deadline)` bypasses the RNG; production callers continue to use `issue_challenge` |
 
-### North Star Summary
+### Expected outcome
 
 After S-007 closes, the daemon enforces two SPEC §6 contracts on
 every challenge transaction: (a) at most one in-flight challenge
@@ -303,16 +302,16 @@ the original `ok` row to investigate. Both defenses are exercised
 against `FakePeripheral` under `tokio::test(start_paused = true)`,
 keeping CI radio-free and sub-second.
 
-## 3. UX Implementation and Assessment
+## 3. UX implementation and assessment
 
-### Time to First Value
+### Time to first value
 - [x] First `sudo` on a fresh daemon still admits within the
       S-006 1.2 s deadline; the per-peer semaphore admits the
       first caller within microseconds.
 - [x] `tokio::test(start_paused = true)` keeps the busy-path test
       sub-second on CI.
 
-### Onboarding Clarity
+### Onboarding clarity
 - [x] Named constants `NONCE_LRU_CAP`, `BUSY_QUEUE_DEADLINE`,
       `BUSY_REASON`, `OUTCOME_REASON_BUSY` document the
       idempotency + backpressure pipeline inline.
@@ -320,29 +319,29 @@ keeping CI radio-free and sub-second.
       every other audit row; `awk -F,` pipelines need no special
       casing.
 
-### Production-Ready Defaults
+### Production-ready defaults
 - [x] `NONCE_LRU_CAP = 64` is the SPEC §6 idempotency floor; no
       operator knob.
 - [x] `BUSY_QUEUE_DEADLINE = Duration::from_millis(1000)` is the
       SPEC §3 scope item #7 floor; no operator knob.
 
-### Golden Path Quality
+### Success path checks
 - [x] First call: acquire permit → notify → wait_for_response →
       verify → check nonce cache → insert nonce → return Ok. One
       named sequence, one function per arrow.
 
-### Decision Load
+### Decision load
 - [x] `Orchestrator::issue_challenge(peer_id, deadline)` keeps
       its two-argument signature; the test-only
       `issue_challenge_with_nonce(peer_id, nonce, deadline)`
       adds one argument for the deterministic-collision test.
 
-### Progressive Complexity
-- [x] The S-006 single-peer challenge surface still works; the
+### Progressive complexity
+- [x] The S-006 single-peer challenge API still works; the
       semaphore admits the first caller within microseconds when
       no concurrent caller exists.
 
-### Error Quality
+### Error quality
 - [x] `Busy` and `Replay` each map to a documented reason string
       on the wire; the PAM caller's error-mapping table is a
       one-line `match`.
@@ -350,15 +349,15 @@ keeping CI radio-free and sub-second.
       `tokio::time::timeout`) collapses to `ChallengeOutcome::Busy`
       with no panic, no `unwrap`.
 
-### Failure Safety
+### Failure safety
 - [x] A panic inside the verify routine cannot leave the
-      semaphore permit leaked — `Drop` releases it on stack
+      semaphore permit leaked, `Drop` releases it on stack
       unwind.
 - [x] A panic inside the nonce-cache `insert` cannot leave the
       audit log un-appended; the audit `append` runs before the
       `match` arm that constructs the return value.
 
-### Runtime Transparency
+### Runtime transparency
 - [x] One audit line per `Busy` and `Replay` outcome on disk.
 - [x] One `tracing::info!` line on `ROTATION_LOG_TARGET` per
       transaction summarising peer_id + outcome.
@@ -366,20 +365,20 @@ keeping CI radio-free and sub-second.
 ### Debuggability
 - [x] `RUST_LOG=syauth_presenced=debug` shows the nonce_hex
       hitting the cache; the audit row's `nonce_hex` column is
-      the canonical join key against the phone-side log.
+      the shared join key against the phone-side log.
 - [x] `tail /var/lib/syauth/last.log | grep replay` returns
       every per-peer replay event.
 
-### Cross-Surface Consistency
+### Consistency across interfaces
 - [x] `BUSY_REASON = "busy"` matches the SPEC §3 scope item #7
       wire text verbatim; the PAM mapper's table is one
       consistent string.
 
-### Workflow Consistency
-- [x] `NonceCache` follows the S-004 / S-005 `PeerEntry` pattern
-      — one small struct on the per-peer record, no fan-out.
+### Workflow consistency
+- [x] `NonceCache` follows the S-004 / S-005 `PeerEntry` pattern,
+one small struct on the per-peer record, no fan-out.
 
-### Change Safety
+### Change safety
 - [x] The `Response::Challenge` wire shape is unchanged from
       S-006; only the `reason` strings expand to include
       `BUSY_REASON`.
@@ -387,41 +386,41 @@ keeping CI radio-free and sub-second.
       (`Busy`); existing match arms in `server.rs` route through
       `outcome.reason_str()` so no callers break.
 
-### Experimentation Safety
+### Experimentation safety
 - [x] Every challenge outcome is exercised against
       `FakePeripheral` in `tests/replay.rs` and
       `tests/backpressure.rs`; no real BlueZ adapter is required
       for CI.
 
-### Interaction Latency
+### Interaction latency
 - [x] One `tokio::time::timeout(BUSY_QUEUE_DEADLINE,
       semaphore.acquire_owned())` per call; no busy loop, no
       polling.
 
-### Developer Feedback Speed
+### Developer feedback speed
 - [x] `cargo test -p syauth-presenced --test replay --test
       backpressure` runs in under a second on CI (paused clock).
 
-### Team Scale
+### Team scale
 - [x] `NonceCache` is a `pub(crate)` struct with a 2-method
-      surface (`contains`, `insert`); reviewers see the cap and
+      API (`contains`, `insert`); reviewers see the cap and
       the eviction policy at the type definition.
 
-### System Scale
-- [x] `NonceCache::contains` is `O(NONCE_LRU_CAP) = O(64)` — a
+### System scale
+- [x] `NonceCache::contains` is `O(NONCE_LRU_CAP) = O(64)`, a
       fixed constant; `insert` is `O(1)` amortised with a single
       `pop_front` on overflow.
 
-### Right Behavior by Default
+### Right behavior by default
 - [x] All named constants in scope: `NONCE_LRU_CAP`,
       `BUSY_QUEUE_DEADLINE`, `BUSY_REASON`, `OUTCOME_REASON_BUSY`.
 
-### Anti-Bypass Design
+### Anti-bypass design
 - [x] Every `Busy` and `Replay` branch writes the audit row
       before returning. There is no codepath that returns without
       an audit append.
 
-## Acceptance Criteria (DoD, verbatim from ROADMAP.md Step S-007)
+## Acceptance criteria (DoD, verbatim from ROADMAP.md step S-007)
 
 - [x] `NonceCache` per-peer LRU (cap 64) implemented in `orchestrator.rs`.
 - [x] Per-peer `Semaphore(1)` gates concurrent challenges.
@@ -437,9 +436,9 @@ keeping CI radio-free and sub-second.
 
 ### TC-01: `repeated_nonce_returns_replay`
 
-**Given** a `FakePeripheral` registered with one peer whose bond
+Given a `FakePeripheral` registered with one peer whose bond
 carries a known `phone_pubkey`, the orchestrator constructed with
-that bond and an audit log pointed at a tempdir. **When** the
+that bond and an audit log pointed at a tempdir. When the
 test signs the challenge frame body built around a fixed nonce
 `A`, calls `fake.inject_response(peer_id, signed_a)`, drives
 `orchestrator.issue_challenge_with_nonce(peer_id, A,
@@ -447,32 +446,31 @@ DEFAULT_AUTH_TIMEOUT)` (assert: `Ok`), then re-signs the same
 nonce-`A` challenge body, calls
 `fake.inject_response(peer_id, signed_a)` a second time, and
 drives `orchestrator.issue_challenge_with_nonce(peer_id, A,
-DEFAULT_AUTH_TIMEOUT)`. **Then** the second call returns
+DEFAULT_AUTH_TIMEOUT)`. Then the second call returns
 `ChallengeOutcome::Replay`, the audit log records 2 lines whose
 outcome columns are `["ok", "replay"]`, and the nonce_hex column
 on both rows equals `hex::encode(A)`.
 
 ### TC-02: `lru_evicts_oldest_nonce_at_cap_65`
 
-**Given** a fresh `NonceCache` (no orchestrator required —
-direct unit test on the LRU data structure). **When** the test
+Given a fresh `NonceCache` (no orchestrator required, direct unit test on the LRU data structure). When the test
 calls `cache.insert(n_i)` for `i in 0..=64` (65 distinct nonces,
 the first one `n_0` and the last one `n_64` are both distinct).
-**Then** `cache.contains(&n_0)` returns `false` (evicted) and
+Then `cache.contains(&n_0)` returns `false` (evicted) and
 `cache.contains(&n_64)` returns `true` (newest). For belt-and-
 suspenders, `cache.contains(&n_1)` returns `true` (still inside
 the cap window).
 
 ### TC-03: `second_in_flight_request_returns_busy_after_1s`
 
-**Given** a `FakePeripheral` registered with one peer, the
+Given a `FakePeripheral` registered with one peer, the
 orchestrator wired with that peer, no injected response (so the
-first task parks on `wait_for_response`). **When** the test
+first task parks on `wait_for_response`). When the test
 spawns task A (`orchestrator.issue_challenge(peer_id,
 DEFAULT_AUTH_TIMEOUT)`), waits a short virtual tick to let task A
 acquire the semaphore and park on `wait_for_response`, then
 spawns task B for the same peer, advances the virtual clock by
-`BUSY_QUEUE_DEADLINE + ε`. **Then** task B resolves to
+`BUSY_QUEUE_DEADLINE + ε`. Then task B resolves to
 `ChallengeOutcome::Busy`, the audit log records one line with
 `outcome=busy`, and task A remains parked (asserted by checking
 the spawn handle is not finished). The test runs under
@@ -483,18 +481,17 @@ is sub-second.
 
 Files created:
 
-- `specs/journeys/JOURNEY-S-007-nonce-lru-backpressure.md` —
-  this document.
-- `crates/syauth-presenced/tests/replay.rs` — two integration
+- `specs/journeys/JOURNEY-S-007-nonce-lru-backpressure.md`,   this document.
+- `crates/syauth-presenced/tests/replay.rs`, two integration
   tests (`repeated_nonce_returns_replay`,
   `lru_evicts_oldest_nonce_at_cap_65`).
-- `crates/syauth-presenced/tests/backpressure.rs` — one
+- `crates/syauth-presenced/tests/backpressure.rs`, one
   `tokio::test(start_paused = true)` integration test
   (`second_in_flight_request_returns_busy_after_1s`).
 
 Files modified:
 
-- `crates/syauth-presenced/src/orchestrator.rs` — adds the
+- `crates/syauth-presenced/src/orchestrator.rs`, adds the
   `NonceCache` struct (`VecDeque<[u8; NONCE_BYTES]>` with
   `contains` + `insert` and an LRU pop-front at `NONCE_LRU_CAP +
   1`), the constants `NONCE_LRU_CAP = 64`,
@@ -515,10 +512,10 @@ Files modified:
   Two unit tests inside `mod tests` cover the
   `NonceCache::contains` + `insert` contract and the cap-1
   eviction.
-- `crates/syauth-presenced/src/lib.rs` — re-exports
+- `crates/syauth-presenced/src/lib.rs`, re-exports
   `BUSY_QUEUE_DEADLINE`, `BUSY_REASON`, `NONCE_LRU_CAP`,
   `NonceCache`, `OUTCOME_REASON_BUSY`.
-- `specs/unlock-proximity/ROADMAP.md` — ticks S-007 DoD bullets
+- `specs/unlock-proximity/ROADMAP.md`, ticks S-007 DoD bullets
   and appends the `Traceability` line.
 
 ## Traceability

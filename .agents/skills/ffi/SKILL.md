@@ -3,11 +3,11 @@ name: ffi
 description: Rust↔C/JNI FFI safety audit and unsafe-boundary review for syauth
 ---
 
-# Agent Instructions: FFI Safety Audit
+# Agent instructions: FFI safety audit
 
 <constraints>
 Do not run git commands. All version control is handled by the user.
-Follow the persona and contracts defined in AGENTS.md.
+Follow the repository specifications and documented contribution checks.
 Unsafe code is denied by default in syauth. Every `unsafe` block requires a `// SAFETY:` comment that names the invariant it relies on. Audits fail when SAFETY comments are missing or stale.
 Run `make lint` before considering any step complete. Run `cargo +nightly miri test` on pure-Rust portions where possible.
 </constraints>
@@ -20,7 +20,7 @@ You produce audits, not patches by default. A patch only follows a finding when 
 
 ---
 
-## When To Use This Skill
+## When to use this skill
 
 Invoke `/ffi` when:
 - Adding a new `extern "C"` function (export or import).
@@ -33,9 +33,9 @@ For PAM module-specific concerns, also run `/pam`.
 
 ---
 
-## Phase 1: Catalog The Boundary
+## Phase 1: catalog the boundary
 
-List every FFI surface in scope. For each surface record:
+List every FFI interface in scope. For each interface, record:
 
 | Direction | Symbol | Header / Crate | repr | Ownership at boundary |
 |-----------|--------|----------------|------|----------------------|
@@ -48,22 +48,22 @@ Skip rows where a vetted safe wrapper exists. Only `unsafe` rows need a full aud
 
 ---
 
-## Phase 2: The Per-Block Audit Checklist
+## Phase 2: the per-block audit checklist
 
 For every `unsafe` block in the audit scope, walk through this checklist and write findings inline:
 
-### A. Pointer validity
+### A. pointer validity
 - [ ] Source of each raw pointer is documented (where it was created, by whom).
 - [ ] Null check or `NonNull::new`? If skipped, justify (e.g. PAM guarantees non-null).
 - [ ] Alignment is guaranteed by `repr(C)` or by the C ABI of the producer.
 - [ ] No use-after-free path: the lifetime of the pointee outlives every dereference.
 
-### B. Aliasing
+### B. aliasing
 - [ ] No `&mut T` exists while another `&T` or `&mut T` to the same allocation is live.
 - [ ] No two `&mut T` derived from the same raw pointer concurrently.
 - [ ] If the pointer crosses a callback, the callback cannot reenter and alias it.
 
-### C. Ownership / Drop
+### C. ownership / drop
 - [ ] Who frees this memory? Producer or consumer?
 - [ ] If Rust allocated and C will free: the allocator matches (`Box::into_raw` requires `Box::from_raw` to free, not `libc::free`).
 - [ ] If C allocated and Rust copies: copy is complete before the C-owned region can be invalidated.
@@ -75,22 +75,22 @@ For every `unsafe` block in the audit scope, walk through this checklist and wri
 - [ ] No niches: `Option<NonNull<T>>` is fine; `Option<&T>` across `extern "C"` is fine; raw `Option<T>` of arbitrary `T` is not.
 - [ ] Enums sent to C are `#[repr(C)]` or `#[repr(i32)]` with a fixed discriminant.
 
-### E. Panic safety
+### E. panic safety
 - [ ] Every exported `extern "C" fn` body is wrapped in `std::panic::catch_unwind`.
-- [ ] On caught panic, the function returns a sentinel error value — never zero/success.
-- [ ] No `?` propagates through the boundary unwrapped — every `Result` is mapped to a return code before the FFI return.
+- [ ] On caught panic, the function returns a sentinel error value, never zero/success.
+- [ ] No `?` propagates through the boundary unwrapped, every `Result` is mapped to a return code before the FFI return.
 
-### F. Encoding
+### F. encoding
 - [ ] Every C string is decoded via `CStr::from_ptr(...).to_str()` with the `Utf8Error` mapped to a failure.
 - [ ] Every Rust string passed to C is built via `CString::new(...)` (no interior NUL) and kept alive for the duration of the C call.
 - [ ] Byte buffers cross the boundary with an explicit length, never NUL-terminated for non-text data.
 
-### G. Threading
+### G. threading
 - [ ] If C can call back into Rust on a different thread, all captured state is `Send + Sync`.
 - [ ] No `&'static` references to thread-local or per-call data leak into C.
 
-### H. JNI-specific (when applicable)
-- [ ] Local refs are released or wrapped in `AutoLocal` — no leaks across N JNI calls.
+### H. jni-specific (when applicable)
+- [ ] Local refs are released or wrapped in `AutoLocal`, no leaks across N JNI calls.
 - [ ] Exceptions are checked (`env.exception_check()`) after every JNI call that can throw.
 - [ ] `JNIEnv` is never retained beyond the call that received it (use `JavaVM::attach_current_thread` instead).
 
@@ -110,20 +110,20 @@ Recommendation: allocate response with libc::malloc + ptr::write; wrap caller in
 
 ---
 
-## Phase 3: Mechanical Checks
+## Phase 3: mechanical checks
 
-Run these even when you think the code is fine — they catch things review misses:
+Run these even when you think the code is fine, they catch things review misses:
 
 1. `cargo +nightly miri test --lib` on pure-Rust modules that touch raw pointers.
 2. `cargo +nightly build -Z sanitizer=address` and run the e2e suite; check for ASan reports.
 3. `cargo +nightly build -Z sanitizer=thread` if threading is involved.
 4. `cbindgen --crate syauth --output target/syauth.h` and diff against the committed header; any divergence is a finding.
-5. `nm -D --defined-only target/release/libpam_syauth.so | grep -v ' pam_sm_'` — exported symbols other than the PAM entry points are leaks; mark them `#[unsafe(no_mangle)] pub(crate)` or rename.
-6. `objdump -h target/release/libpam_syauth.so | grep -E '\.eh_frame|\.gcc_except_table'` should be present — confirms unwind tables exist for `catch_unwind` to work.
+5. `nm -D --defined-only target/release/libpam_syauth.so | grep -v ' pam_sm_'`, exported symbols other than the PAM entry points are leaks; mark them `#[unsafe(no_mangle)] pub(crate)` or rename.
+6. `objdump -h target/release/libpam_syauth.so | grep -E '\.eh_frame|\.gcc_except_table'` should be present, confirms unwind tables exist for `catch_unwind` to work.
 
 ---
 
-## Phase 4: Document Findings
+## Phase 4: document findings
 
 Write the audit to `specs/audits/FFI-{datetime}.md` with:
 
@@ -155,10 +155,10 @@ Apply trivial one-line fixes inline; for anything larger, open a roadmap item vi
 
 Before closing the audit:
 
-- Did you list every FFI surface, not just the ones that changed?
+- Did you list every FFI interface in scope, including unchanged ones?
 - For every `unsafe` block in scope, did you walk all eight checklist sections?
 - Did at least one mechanical check (miri or asan) run, with output captured?
-- Is every finding actionable — does it name a file, a line, and a fix?
+- Is every finding actionable, does it name a file, a line, and a fix?
 - Did you verify the `catch_unwind` boundary on every exported `extern "C" fn`?
 
 </self_check>
@@ -169,7 +169,7 @@ Before closing the audit:
 2. Never unwind across `extern "C"`. `catch_unwind` at every export, full stop.
 3. Allocator must match. Rust-allocated memory is Rust-freed; C-allocated is C-freed.
 4. Ownership at the boundary is documented in prose, not inferred.
-5. Prefer safe wrappers (`pam-bindings`, `zbus`, `jni::objects::JString`) over raw pointers — replace raw FFI with a wrapper when one exists.
-6. A flaky FFI test is not flaky — it is undefined behavior surfacing. Treat it as P0.
+5. Prefer safe wrappers (`pam-bindings`, `zbus`, `jni::objects::JString`) over raw pointers, replace raw FFI with a wrapper when one exists.
+6. A flaky FFI test is not flaky, it is undefined behavior surfacing. Treat it as P0.
 
 </rules>

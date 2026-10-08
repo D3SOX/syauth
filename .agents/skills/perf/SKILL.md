@@ -4,28 +4,28 @@ description: Performance diagnosis and optimization workflow
 ---
 
 
-# Agent Instructions: Rust Performance Optimization
+# Agent instructions: Rust performance optimization
 
 <role>
 You are a performance-focused systems agent. Your goal is to diagnose bottlenecks and maximize throughput in a Rust application.
 </role>
 
-You must **first diagnose** the bottleneck (waiting vs compute vs lock contention vs boundary overhead), then implement the architecture that matches the findings, because optimizing without a diagnosis often makes performance worse by solving the wrong problem.
+You must first diagnose the bottleneck (waiting vs compute vs lock contention vs boundary overhead), then implement the architecture that matches the findings, because optimizing without a diagnosis often makes performance worse by solving the wrong problem.
 
 ---
 
-## 1) Non-Negotiable Principles
-1. **Measure before optimizing** — never guess; always profile first.
-2. **Minimize allocations in hot paths** — use arenas, pre-allocated buffers, stack allocation.
-3. **Separate I/O from compute** — I/O-bound and CPU-bound work scale differently.
-4. **Batch operations** — amortize overhead across many items.
-5. **Leverage zero-cost abstractions** — iterators, monomorphization, and inline hints.
+## 1) Non-Negotiable principles
+1. Measure before optimizing, never guess; always profile first.
+2. Minimize allocations in hot paths, use arenas, pre-allocated buffers, stack allocation.
+3. Separate I/O from compute, I/O-bound and CPU-bound work scale differently.
+4. Batch operations, amortize overhead across many items.
+5. Use zero-cost abstractions, iterators, monomorphization, and inline hints.
 
 ---
 
-## 2) Mandatory Phase 1: Symptom-Driven Diagnostics (Do This First)
+## 2) Mandatory phase 1: symptom-driven diagnostics (do this first)
 
-### 1.1 Establish a Reproducible Benchmark Harness
+### 1.1 Establish a reproducible benchmark harness
 Create a deterministic benchmark using `criterion` or built-in `#[bench]`:
 - Fixed input data set
 - Warm-up run (discard)
@@ -37,7 +37,7 @@ Record:
 - CPU utilization (total + per-core)
 - RSS / page faults (if available)
 
-**Acceptance:** results reproducible within +/-5-10%.
+Acceptance. Results reproducible within +/-5-10%.
 
 ---
 
@@ -56,7 +56,7 @@ cargo install flamegraph
 cargo flamegraph --bin syauth
 ```
 
-**What to look for:**
+What to look for.
 - Wide bars in allocator functions (`alloc`, `dealloc`, `realloc`)
 - Lock contention (`pthread_mutex_lock`, `parking_lot`)
 - Syscall overhead (`read`, `write`, `futex`)
@@ -64,7 +64,7 @@ cargo flamegraph --bin syauth
 
 ---
 
-### 1.3 Memory Profiling
+### 1.3 Memory profiling
 Use `DHAT` (via valgrind) or `heaptrack`:
 
 ```bash
@@ -73,14 +73,14 @@ valgrind --tool=dhat ./target/release/syauth
 heaptrack ./target/release/syauth
 ```
 
-**Red flags:**
+Red flags.
 - Many small allocations in hot loops
 - Growing RSS without matching workload increase
 - Frequent allocation/deallocation cycles (use arena or pool)
 
 ---
 
-### 1.4 System-Level Profiling
+### 1.4 System-Level profiling
 #### Linux
 - `perf stat` for hardware counters (cycles, cache misses, branches)
 - `iostat -x 1` / `pidstat -d 1` for disk I/O
@@ -94,54 +94,54 @@ heaptrack ./target/release/syauth
 
 ---
 
-### 1.5 Classification: Decide Bottleneck Class
+### 1.5 Classification: decide bottleneck class
 
-**Class A -- Allocation bound**
+Class A -- Allocation bound
 - Allocator functions dominate flamegraph; many small allocs in hot path
 
-**Class B -- Lock contention**
+Class B -- Lock contention
 - Mutex/RwLock/parking_lot dominate; threads waiting
 
-**Class C -- I/O bound**
+Class C -- I/O bound
 - read/write/futex dominate; disk metrics show wait; CPU low
 
-**Class D -- Compute bound**
+Class D -- Compute bound
 - CPU at 100%; actual computation dominates flamegraph
 
-**Class E -- Cache/memory bound**
+Class E -- Cache/memory bound
 - High cache miss rate in `perf stat`; data layout not cache-friendly
 
 Write a short diagnosis note mapping evidence to class.
 
 ---
 
-## 3) Mandatory Phase 2: Apply Architecture Pattern Matching Diagnosis
+## 3) Mandatory phase 2: apply architecture pattern matching diagnosis
 
-### 2.1 If Class A (Allocation bound): Pool + Arena + Stack
+### 2.1 If class A (allocation bound): pool + arena + stack
 - Use `bumpalo` or `typed-arena` for batch allocations
 - Pre-allocate `Vec` with known capacity
 - Use `SmallVec` for small, stack-allocated vectors
 - Replace `String` with `&str` or `Cow<str>` in hot paths
 - Use `bytes::Bytes` for zero-copy buffer sharing
 
-### 2.2 If Class B (Lock contention): Shard + Lock-free
+### 2.2 If class B (lock contention): shard + lock-free
 - Replace `Mutex<HashMap>` with `dashmap` or sharded locks
 - Use `crossbeam` channels instead of `std::sync::mpsc`
 - Use atomic operations for counters and flags
 - Per-thread state with thread-local storage
 
-### 2.3 If Class C (I/O bound): Async + Batching
+### 2.3 If class C (I/O bound): async + batching
 - Use `tokio` or `async-std` for concurrent I/O
 - Buffer writes with `BufWriter`
 - Batch reads with `BufReader`
 - Use `io_uring` via `tokio-uring` for Linux high-perf I/O
 
-### 2.4 If Class D (Compute bound): SIMD + Parallelism
+### 2.4 If class D (compute bound): SIMD + parallelism
 - Use `rayon` for data parallelism
 - Consider SIMD via `std::simd` or `packed_simd`
 - Profile branch prediction misses and optimize data flow
 
-### 2.5 If Class E (Cache/memory bound): Layout + Prefetch
+### 2.5 If class E (Cache/memory bound): layout + prefetch
 - Use struct-of-arrays instead of array-of-structs
 - Align data to cache lines (64 bytes)
 - Group frequently accessed fields together
@@ -149,9 +149,9 @@ Write a short diagnosis note mapping evidence to class.
 
 ---
 
-## 4) Common Rust Performance Patterns
+## 4) Common Rust performance patterns
 
-### 4.1 Reduce Allocations
+### 4.1 Reduce allocations
 ```rust
 // Pre-allocate with capacity
 let mut results = Vec::with_capacity(expected_count);
@@ -169,7 +169,7 @@ for item in items {
 }
 ```
 
-### 4.2 Efficient Concurrency
+### 4.2 Efficient concurrency
 ```rust
 // Rayon for data parallelism
 use rayon::prelude::*;
@@ -196,9 +196,9 @@ let mmap = unsafe { Mmap::map(&file)? };
 
 ---
 
-## 5) Performance Traps
+## 5) Performance traps
 
-- Optimizing without profiling evidence is premature optimization — it wastes effort and often makes things worse.
+- Optimizing without profiling evidence is premature optimization, it wastes effort and often makes things worse.
 - Justify every `.clone()` in hot loops; prefer borrowing or `Cow` when possible.
 - Use `&str` or `Cow<str>` instead of `String` in hot paths, because allocation dominates when called millions of times.
 - Prefer monomorphization over `Box<dyn Trait>` in hot paths, because dynamic dispatch adds indirection cost.

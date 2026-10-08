@@ -1,30 +1,29 @@
 ---
 name: march
-description: User-driven orchestrator — takes an explicit list of DEV-NNN / S-NNN IDs from the user (no auto-discovery, no defaults) and ships them in the order given by delegating each to `/implement` in a fresh subagent, with three-gate verification (`scope-discipline`, `lint`, `test`), idempotent resumption, and an audit-trail run log
+description: User-driven orchestrator, takes an explicit list of DEV-NNN / S-NNN IDs from the user (no auto-discovery, no defaults) and ships them in the order given by delegating each to `/implement` in a fresh subagent, with three-gate verification (`scope-discipline`, `lint`, `test`), idempotent resumption, and an audit-trail run log
 ---
 
-# Agent Instructions: `/march` — User-Driven Item Orchestrator (syauth)
+# Agent instructions: `/march`, user-driven item orchestrator (syauth)
 
 <constraints>
 Do not run git commands. All version control is handled by the user.
-Follow the persona and contracts defined in AGENTS.md.
+Follow the repository specifications and documented contribution checks.
 
-**Scope Discipline (Non-Negotiable) applies to you and to every subagent
-you spawn.** AGENTS.md → "Scope Discipline (Non-Negotiable)" is
-load-bearing. In particular:
+Scope Discipline (Non-Negotiable) applies to you and to every subagent
+you spawn. Read the SPEC and roadmap before implementation. In particular:
 - No invented scoping vocabulary. Never use `v0.1 demo`, `v0.2 will…`,
   "first cut", "for now", or any future-tense excuse that does not
   grep-match an existing `specs/syauth/SPEC.md` or
   `specs/syauth/ROADMAP.md` item.
-- Any weakening of SPEC §3.2 D1–D8 or §3.3 ML "IN — v0.1.0" requires
+- Any weakening of SPEC §3.2 D1–D8 or §3.3 ML inclusion list for v0.1.0 requires
   explicit user approval first, then a `// SPEC-DEVIATION: DEV-NNN`
   marker AND a row in `docs/known-gaps.md`. Hard-stop the loop if you
   catch yourself or a subagent producing un-rowed deviations.
 - Stubs are tagged `// GAP: DEV-NNN — <closure plan>`, never with a
   future-version excuse.
 
-**No estimations.** AGENTS.md → "No estimations" is load-bearing.
-Never emit time/effort/context-budget sizing in any form — not in run
+No estimations.
+Never emit time/effort/context-budget sizing in any form, not in run
 log lines, not in subagent prompts, not in the final summary. Forbidden
 phrases include "multi-day", "small change", "substantial work",
 "a few hours", "context is getting deep". State only WHAT and WHY, not
@@ -41,7 +40,7 @@ on the hard-stop conditions below.
 Never approve or update goldens, push code, create tags, or perform
 any destructive action. Those are user-driven.
 
-Never write journey docs or implementation code directly — only
+Never write journey docs or implementation code directly, only
 `/implement` (via subagent) does that.
 </constraints>
 
@@ -63,7 +62,7 @@ sequencing, verification, audit, and a clean resume on interrupt.
 Use `/march` when the user has named, explicitly, what to march. The
 user supplies the work list; `/march` does NOT discover, infer, guess,
 or fall back to "everything that looks open". If the user did not
-name targets, hard-stop and ask — do not invent a target list.
+name targets, hard-stop and ask, do not invent a target list.
 
 Acceptable user input forms (all explicit):
 - A single identifier: `DEV-001`, `S-014`.
@@ -71,7 +70,7 @@ Acceptable user input forms (all explicit):
 - A literal range pinned to a file: `DEV-001..DEV-004 in docs/known-gaps.md`
   (the file is named so the IDs are unambiguous).
 - A file path PLUS an explicit "all open rows in this file" instruction.
-  The skill does not assume the user means "all open rows" — they must
+  The skill does not assume the user means "all open rows", they must
   say so.
 
 Do NOT use this skill for:
@@ -87,32 +86,32 @@ Do NOT use this skill for:
 
 ---
 
-## Operating Principles
+## Operating principles
 
-1. **The user names the work.** `/march` never invents the work list.
+1. The user names the work. `/march` never invents the work list.
    No auto-discovery, no "default to known-gaps.md", no "fall back to
    the roadmap". If the input is missing or ambiguous, hard-stop and
-   ask. The user-supplied list IS the march order — do not reorder it.
-2. **Forward motion over perfection.** Once the work list is fixed by
+   ask. The user-supplied list IS the march order, do not reorder it.
+2. Forward motion over perfection. Once the work list is fixed by
    the user, when a soft decision blocks an item pick the most
    conservative option, log the assumption, continue.
-3. **The checkbox / DEV-NNN status is the idempotency key.** A
+3. The checkbox / DEV-NNN status is the idempotency key. A
    `DEV-NNN` row whose closure condition holds on disk is closed; an
    open row is open. A ticked `- [x]` is done; an unticked `- [ ]` needs
    work. Never tick or close without on-disk evidence.
-4. **Subagents do the work.** The orchestrator hands the next
+4. Subagents do the work. The orchestrator hands the next
    user-named item to a subagent; the subagent owns journey doc +
    implementation. Do not inline `/implement` logic.
-5. **One run log, append only.** Every action, assumption, retry, and
+5. One run log, append only. Every action, assumption, retry, and
    skill transition appends to `specs/auto/RUN-<datetime>.md`. The user
    reads this to see exactly what happened.
-6. **Hard gates, soft prompts.** `make scope-discipline`, `make lint`,
+6. Hard gates, soft prompts. `make scope-discipline`, `make lint`,
    `make test` failures halt the loop after one retry. Style preferences
    get a default and a log line.
-7. **Self-contained subagent prompts.** Every subagent is invoked with
+7. Self-contained subagent prompts. Every subagent is invoked with
    a prompt that includes its own mandatory reading list and full
-   context — no implicit knowledge.
-8. **Scope Discipline is a gate, not a guideline.** A subagent that
+   context, no implicit knowledge.
+8. Scope Discipline is a gate, not a guideline. A subagent that
    ships banned vocabulary or an un-rowed deviation is treated like a
    red `make test`: retry once, then hard-stop.
 
@@ -124,33 +123,33 @@ Do NOT use this skill for:
 /march <id-or-list> [--parallel K] [--isolation worktree]
 ```
 
-`<id-or-list>` is **mandatory** and comes from the user, verbatim, in
+`<id-or-list>` is mandatory and comes from the user, verbatim, in
 the message that triggered the skill. The skill does not invent it.
 
-Accepted forms (parsed strictly — anything else is a hard-stop):
+Accepted forms (parsed strictly, anything else is a hard-stop):
 
 - One identifier: `DEV-001`, `S-014`.
 - Multiple identifiers, ordered: `DEV-001 DEV-003 DEV-004 DEV-002` or
   `DEV-001,DEV-003,DEV-004,DEV-002`. The order is preserved as the
-  march order — never re-sort.
+  march order, never re-sort.
 - A range pinned to a file: `DEV-001..DEV-004 in docs/known-gaps.md`
   or `S-001..S-010 in specs/syauth/ROADMAP.md`. The file MUST be named
   in the input; `/march` does not pick a file on its behalf.
 - A file path with an explicit "all open rows in this file" instruction
   from the user, e.g. `/march all open rows in docs/known-gaps.md`. In
   this case `/march` reads the file, lists the items it found, and
-  **re-prompts the user to confirm the list and the order** before
+  re-prompts the user to confirm the list and the order before
   spawning any subagent. Do not auto-confirm.
 
 Flags:
-- `--parallel K`. Run up to K items concurrently. **Defaults to 1.**
+- `--parallel K`. Run up to K items concurrently. Defaults to 1.
   When >1, `--isolation worktree` is required for safety. The user
   must pass both flags explicitly to opt into parallelism.
 - `--isolation worktree`. Spawn each subagent in a fresh git worktree
   so concurrent edits never collide. Only meaningful with
   `--parallel >1`.
 
-If the user invoked `/march` with no `<id-or-list>` — hard-stop
+If the user invoked `/march` with no `<id-or-list>`, hard-stop
 immediately:
 
 ```
@@ -169,27 +168,27 @@ Do not enter the loop, do not open a run log, do not spawn a subagent.
 Once the user has named the work list (and confirmed it, if they used
 the "all open rows in <file>" form):
 
-1. **Resolve each named ID against its host file.** For a `DEV-NNN`,
+1. Resolve each named ID against its host file. For a `DEV-NNN`,
    locate the matching `### \`DEV-NNN\`` row in `docs/known-gaps.md`.
    For an `S-NNN`, locate the matching `## Step S-NNN:` block in
    `specs/syauth/ROADMAP.md`. If a named ID is not found, hard-stop
-   with cause `unknown identifier <id>` — do not silently skip, do
+   with cause `unknown identifier <id>`, do not silently skip, do
    not fuzz-match.
-2. **Confirm each named ID is actually open.** A `DEV-NNN` row is open
-   iff its `**Status:**` line is anything other than `**Closed**`. An
+2. Confirm each named ID is open. A `DEV-NNN` row is open
+   iff its `Status.` line is anything other than `**Closed**`. An
    `S-NNN` step is open iff at least one DoD bullet is `[ ]`. If a
-   named ID is already closed, surface that to the user and stop — do
+   named ID is already closed, tell the user and stop, do
    NOT silently skip ahead. The user named it, so the user gets to
    decide whether to drop it or treat the closure as a mistake.
-3. **Choose a run log.** If `specs/auto/RUN-*.md` exists and its last
+3. Choose a run log. If `specs/auto/RUN-*.md` exists and its last
    `Status` is not `complete` / `blocked`, append to it as a
    resumption. Otherwise create `specs/auto/RUN-<datetime>.md` with the
    standard header below.
-4. **Pre-flight gate.** Run `make scope-discipline`, `make lint`, and
-   `make test` once. They MUST pass cleanly before the first item — if
+4. Pre-flight gate. Run `make scope-discipline`, `make lint`, and
+   `make test` once. They MUST pass cleanly before the first item, if
    not, the workspace is already broken and `/march` hard-stops with
    cause `pre-flight gate red: <which>`.
-5. **Record baselines.** Note the current `make test` total count and
+5. Record baselines. Note the current `make test` total count and
    the current `make scope-discipline` clean state. These become the
    deltas against which subagent reports are validated.
 
@@ -198,7 +197,7 @@ compact final summary. Do not enter the loop.
 
 ---
 
-## The Loop
+## The loop
 
 For each item in the user-supplied list, in the exact order the user
 gave:
@@ -212,13 +211,13 @@ gave:
 - Append to run log: `[<id>] start at <ts>`.
 
 ### 2. Delegate
-- Spawn ONE subagent using the canonical prompt template (see
+- Spawn ONE subagent using the prompt template (see
   §Subagent Prompt Template below).
 - The subagent's `subagent_type` is `general-purpose`.
 - Wait for the subagent's final message. Do not interleave other work
   for this item.
 
-### 3. Verify (mandatory — never skip)
+### 3. Verify (mandatory, never skip)
 The subagent's claim of success is necessary but not sufficient.
 Verify against disk:
 - The journey doc the subagent reports MUST exist at
@@ -236,10 +235,10 @@ Verify against disk:
 - For an `S-NNN` item: at least one file from "Files likely affected"
   MUST have been modified or created (otherwise the item produced no
   observable change).
-- All DoD bullets MUST be representable as `[x]` — if the subagent
+- All DoD bullets MUST be representable as `[x]`, if the subagent
   left some unchecked, complete the tick yourself only if their
   evidence is on disk; otherwise the item is NOT done.
-- If the item closes a `DEV-NNN` row, the row's `**Status:**` line is
+- If the item closes a `DEV-NNN` row, the row's `Status.` line is
   updated to `**Closed** (commit pending)` and a "Closed" subsection is
   appended at the bottom of `docs/known-gaps.md` with the closure
   evidence.
@@ -253,15 +252,15 @@ If any check fails → §4 Retry. If all checks pass → §5 Commit.
   which gate failed (`scope-discipline` vs `lint` vs `test` vs
   `closure condition`), (c) an instruction to inspect rather than
   rewrite.
-- Spawn one more subagent with the canonical prompt + the preamble.
+- Spawn one more subagent with the prompt + the preamble.
 - If the second attempt also fails verification → §6 Hard-Stop with
   cause `repeated red gate on item <id>: <which gate>`.
 
 ### 5. Commit
 - For an `S-NNN` item: mark every DoD bullet `[x]` in the roadmap; add
   a Traceability line below the DoD block:
-  `**Traceability:** journey at \`specs/journeys/JOURNEY-<id>-<slug>.md\`; implementation in <files>; closed <ts>.`
-- For a `DEV-NNN` item: update the row's `**Status:**` to `**Closed**`,
+  `Traceability. Journey at \`specs/journeys/JOURNEY-<id>-<slug>.md\`; implementation in <files>; closed <ts>.`
+- For a `DEV-NNN` item: update the row's `Status.` to `**Closed**`,
   add the closure timestamp + journey doc reference, and move the row
   from "Open deviations" to "Closed deviations".
 - Append to run log: `[<id>] done <ts> — tests N→M (+Δ), scope-discipline ok, lint ok`.
@@ -270,10 +269,10 @@ If any check fails → §4 Retry. If all checks pass → §5 Commit.
 Conditions:
 - `/march` was invoked without an explicit `<id-or-list>` from the user.
 - A named ID does not resolve to a real `DEV-NNN` row or `S-NNN` step.
-- A named ID is already closed (surface to user, do not silently skip).
+- A named ID is already closed (report to the user, do not silently skip).
 - Pre-flight gate red (`scope-discipline`, `lint`, or `test`).
 - DoR / "once DEV-XXX closes" precondition not satisfied for an item.
-  Do NOT auto-insert the prerequisite into the work list — the user
+  Do NOT auto-insert the prerequisite into the work list, the user
   decides whether to extend the list or abort.
 - Same item failed verification twice (repeated red gate).
 - Subagent reported a `Spec gap` or `External dependency missing` blocker.
@@ -297,7 +296,7 @@ When every open item is now closed:
 
 ---
 
-## Subagent Prompt Template
+## Subagent prompt template
 
 When delegating item `<id>`, the subagent prompt MUST include these
 eight sections, in this order. Substitute placeholders from the parsed
@@ -307,7 +306,7 @@ item.
 You are executing <id> end-to-end (journey doc then implement). Driven by `/march`.
 
 Mandatory reading:
-1. /home/dmitriy/sources/syauth/AGENTS.md
+1. /home/dmitriy/sources/syauth/README.md
    — esp. "Scope Discipline (Non-Negotiable)" and "No estimations". Load-bearing.
 2. /home/dmitriy/sources/syauth/.agents/skills/journey/SKILL.md
 3. /home/dmitriy/sources/syauth/.agents/skills/implement/SKILL.md
@@ -415,7 +414,7 @@ instead. The original brief is below.
 
 ---
 
-## Decision Defaults (replacing user clarifying questions)
+## Decision defaults (replacing user clarifying questions)
 
 When a subagent would normally prompt the user, the orchestrator's
 standing decisions apply:
@@ -425,19 +424,19 @@ standing decisions apply:
 | Test framework | `cargo test` for unit/integration; `insta` for snapshot; `proptest` only after an example test; Android tests via Robolectric/JUnit5 |
 | New dependency | Prefer crates already in the workspace; if none fits, reject and write minimal in-house |
 | BLE behavioural ambiguity | Adopt the SPEC §3.2 D1–D8 interpretation, even if it costs more code than the stub |
-| Lint warning that looks pre-existing | Fix it (AGENTS.md non-negotiable) |
+| Lint warning that looks pre-existing | Fix it (the required lint check) |
 | `make scope-discipline` flags a phrase a subagent introduced | Hard-stop the item, retry preamble must include the offending line |
 | Unrelated failing test exposed during work | File a `specs/bugs/BUG-<ts>.md`, continue (do not silently fix unrelated tests) |
-| Performance regression detected | Halt the loop, surface as hard-stop with cause `performance regression` |
+| Performance regression detected | Halt the loop, appear as hard-stop with cause `performance regression` |
 | DoD / closure condition ambiguous | Adopt strictest reasonable interpretation; log the assumption |
 | Tempted to ship a "demo" code path | Stop and report as hard blocker. Never invent the framing. |
 
-Any decision not on this list and not obvious from AGENTS.md / SPEC:
+Any decision not on this list and not obvious from the SPEC:
 pick the most conservative option, log the assumption, continue.
 
 ---
 
-## Run Log Format
+## Run log format
 
 Append to `specs/auto/RUN-<datetime>.md`:
 
@@ -498,7 +497,7 @@ march
 
 ---
 
-## Output Format (per `/march` invocation)
+## Output format (per `/march` invocation)
 
 The final message to the user is ≤10 lines:
 
@@ -519,15 +518,15 @@ Anything longer goes in the run log.
 
 ---
 
-## Cadence Rules
+## Cadence rules
 
-- **Every item:** one journey doc, one implementation, one verified
+- Every item. One journey doc, one implementation, one verified
   `make scope-discipline` + `make lint` + `make test` pass, one closure
   probe, one run-log entry.
-- **Every closed DEV-NNN:** row moves from "Open deviations" to
+- Every closed DEV-NNN. Row moves from "Open deviations" to
   "Closed deviations" in `docs/known-gaps.md` with timestamp and
   journey doc pointer.
-- **Every hard-stop:** a `BLOCKED` section plus the compact final
+- Every hard-stop. a `BLOCKED` section plus the compact final
   summary.
 
 Do not bundle multiple items into one subagent. Do not skip any of the
@@ -543,7 +542,7 @@ Before reporting `complete`:
 - Every previously-open `S-NNN` DoD bullet is now `[x]` with on-disk
   evidence?
 - `make scope-discipline`, `make lint`, and `make test` are clean at
-  the workspace level (not just the last item's scope)?
+  the workspace level, including earlier items?
 - Every assumption is in the run log?
 - Every retry is in the run log with a reason and which gate failed?
 - The run log's final `Status` is `complete`?
@@ -563,33 +562,33 @@ Before reporting `blocked`:
 
 <rules>
 
-1. **The user names the work.** `/march` invoked without an explicit
+1. The user names the work. `/march` invoked without an explicit
    `<id-or-list>` hard-stops. No defaults, no auto-discovery, no
    "obvious next thing". Ask, do not guess.
-2. **Preserve user order.** The march order is the order the user
+2. Preserve user order. The march order is the order the user
    wrote the IDs. Never re-sort, never re-prioritize, never silently
    insert a prerequisite.
-3. **Do not write code directly.** Only `/implement` writes code, via subagent.
-4. **Tick checkboxes / close DEV-NNN rows only with evidence.** No
+3. Do not write code directly. Only `/implement` writes code, via subagent.
+4. Tick checkboxes / close DEV-NNN rows only with evidence. No
    subagent self-claim is sufficient. For DEV-NNN, the row's closure
    probe must re-run successfully under the orchestrator.
-5. **One subagent per item.** No bundling, no fan-out within one item.
-6. **One retry per item.** Second failure is a hard-stop.
-7. **One run log per invocation chain.** Append, never rewrite earlier
+5. One subagent per item. No bundling, no fan-out within one item.
+6. One retry per item. Second failure is a hard-stop.
+7. One run log per invocation chain. Append, never rewrite earlier
    sections.
-8. **Self-contained subagent prompts.** Subagents see only what you
-   pass them — including the Scope Discipline + No estimations
+8. Self-contained subagent prompts. Subagents see only what you
+   pass them, including the Scope Discipline + No estimations
    reminders.
-9. **No destructive actions.** No pushes, no force-anything, no tag
+9. No destructive actions. No pushes, no force-anything, no tag
    creation, no commits.
-10. **Honor user interrupts cleanly.** Let the in-flight subagent
+10. Honor user interrupts cleanly. Let the in-flight subagent
     finish; stop at the next item boundary.
-11. **The run log is the contract.** If it's not in the log, it didn't
+11. The run log is the contract. If it's not in the log, it didn't
     happen.
-12. **Scope Discipline is a hard gate.** Any banned vocabulary or
-    un-rowed SPEC deviation is treated like a red `make test` — retry
+12. Scope Discipline is a hard gate. Any banned vocabulary or
+    un-rowed SPEC deviation is treated like a red `make test`, retry
     once, then hard-stop.
-13. **No estimations, ever.** Not in run log lines, not in subagent
+13. No estimations, ever. Not in run log lines, not in subagent
     prompts, not in the final summary. The user banned this
     vocabulary explicitly.
 
