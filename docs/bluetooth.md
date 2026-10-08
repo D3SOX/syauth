@@ -7,14 +7,19 @@ The phone also requests LE when creating the system bond.
 
 BLE still involves pairing and a connection. A paired laptop can appear under
 Android's normal Bluetooth settings, and KDE can show the phone as connected.
-That status alone does not identify the transport. The app keeps its GATT link
-open so the desktop can send an authentication challenge immediately.
+That status alone does not identify the transport. Android Settings tracks
+[system profile connections](https://android.googlesource.com/platform/frameworks/base/+/master/packages/SettingsLib/src/com/android/settingslib/bluetooth/CachedBluetoothDevice.java)
+separately from an app's GATT link. An app can keep a BLE connection without
+Android showing the device as active for audio or calls. syauth keeps its GATT
+link open so the desktop can send an authentication challenge immediately.
 
 Bluetooth audio, calls, contact sharing, and network tethering are unnecessary.
 Android and BlueZ may offer these profiles because both devices also support
-Classic Bluetooth. In the tested Pixel setup, BlueZ exposed separate A2DP and
-AVRCP objects for the phone. This observation does not establish which process
-opened them. syauth's current desktop recovery code never calls the generic
+Classic Bluetooth. The Pixel initially had both encrypted LE and BR/EDR links
+to the laptop, with the laptop active for media and calls. Disabling Media audio
+and Phone calls removed the BR/EDR link while preserving encrypted LE. The
+Pixel's device settings then offered "Connect" instead of showing an active
+audio connection. syauth's current desktop recovery code never calls the generic
 `Device1.Connect` method, which can connect multiple profiles.
 
 See Android's [GATT transport documentation](https://developer.android.com/reference/android/bluetooth/BluetoothDevice)
@@ -37,10 +42,22 @@ and BlueZ's [device connection API](https://github.com/bluez/bluez/blob/master/d
 5. Leave the phone idle with its screen off, then repeat sudo. Check that
    headphones remain connected throughout.
 
-The phone may still appear as connected after disabling audio profiles because
-its BLE link remains open. Do not disable Classic Bluetooth on the entire
-adapter; headphones may need it. Forgetting the laptop on the phone removes the
-system bond and requires pairing again.
+KDE may still show the phone as connected because its BLE link remains open.
+Do not disable Classic Bluetooth on the entire adapter; headphones may need it.
+Forgetting the laptop on the phone removes the system bond and requires pairing
+again.
+
+On 2026-10-08, the Pixel 8 Pro on Android 16 passed private PAM authentication,
+`sudo -k; sudo true`, KDE fingerprint unlock, and KDE password unlock with both
+audio profiles disabled. Password unlock dismissed the pending phone dialog.
+The Pixel's Bluetooth diagnostics reported `ACL BR/EDR:N LE:Y` and an encrypted
+LE link after fingerprint approval. The audio and call profiles stayed disabled.
+
+The first request after the APK update hit a stale desktop notification writer.
+The daemon rebuilt its GATT service. Reopening the Android app after a force-stop
+restored its subscription, and the next fingerprint request succeeded. This
+update recovery still needs work; the checks above do not prove automatic
+reconnection after an APK update.
 
 ## Emulator transport test
 
