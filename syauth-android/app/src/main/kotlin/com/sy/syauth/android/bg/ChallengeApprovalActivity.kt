@@ -1,6 +1,6 @@
 // Roadmap item S-014 — `ChallengeApprovalActivity` (transparent,
 // over-keyguard). Roadmap item S-015 — BiometricPrompt
-// (`BIOMETRIC_STRONG`) + Keystore Ed25519 sign on Approve.
+// (`BIOMETRIC_STRONG`) + Keystore Ed25519 sign on biometric success.
 //
 // `SyauthCompanionService` launches this activity via
 // `PendingIntent.getActivity` on every fresh challenge frame the
@@ -19,12 +19,12 @@
 // from the bond record's `hostName` — never from the incoming frame),
 // pinning the SPEC §9 Q2 guarantee at the activity boundary.
 //
-// On Cancel, the activity writes a denied frame back through the
+// On Disallow, the activity writes a denied frame back through the
 // same GATT connection by handing the bytes to the
 // `SyauthCompanionService` companion seam [CancelSink]; production
 // wires the sink to `PersistentGattClient.writeResponse(...)`.
 //
-// On Approve (S-015), the activity hands the bond's
+// On its first resume, the activity automatically hands the bond's
 // `EXTRA_KEYSTORE_ALIAS` and the verbatim `EXTRA_CHALLENGE_BYTES` to
 // the [BiometricGate] companion seam. The production
 // implementation builds a `BiometricPrompt` whose
@@ -37,8 +37,9 @@
 // response payload. The bytes flow to the [ResponseSink] companion
 // seam; production wires it to
 // `PersistentGattClient.writeResponse(...)` on the same connection
-// the challenge arrived on. On biometric fail / cancel, the activity
-// writes `DENIED_FRAME_BYTES` via the response sink. SPEC §3.2 D6
+// the challenge arrived on. Dismissing biometrics returns to the
+// Authorize/Disallow screen without responding. Other biometric errors
+// write `DENIED_FRAME_BYTES` via the response sink. SPEC §3.2 D6
 // per-use auth + §7 T-Relay defense pin this contract.
 //
 // The denied-frame wire shape is the SPEC v1 frame layout
@@ -179,7 +180,7 @@ public val PROMPT_NEGATIVE_RES: Int = R.string.syauth_biometric_prompt_cancel
 public val DENIED_FRAME_BYTES: ByteArray = ByteArray(SIGNATURE_LEN) { 0 }
 
 /**
- * Sink the activity calls on Cancel. Production wires it to a service-side
+ * Sink the activity calls on Disallow. Production wires it to a service-side
  * helper that resolves the per-peer `PersistentGattClient` and calls
  * `writeResponse(deniedFrameBytes)`; tests inject a recording fake.
  */
@@ -190,7 +191,7 @@ public fun interface CancelSink {
 /**
  * Sink the activity calls with the **approve** response — either the
  * 64-byte Ed25519 signature on success, or [DENIED_FRAME_BYTES] on
- * biometric fail / cancel. Production wires it to a service-side
+ * biometric errors. Production wires it to a service-side
  * helper that resolves the per-peer `PersistentGattClient` and
  * calls `writeResponse(responseBytes)` on the same GATT connection
  * the challenge arrived on; tests inject a recording fake.
@@ -205,11 +206,14 @@ public fun interface ResponseSink {
 }
 
 /**
- * Callback the [BiometricGate] invokes with the terminal outcome of
- * the BiometricPrompt round. Implementations MUST invoke exactly
- * one of [onSucceeded] / [onFailed] per `authenticate(...)` call.
+ * Callback for one BiometricPrompt operation. Implementations invoke
+ * exactly one of [onSucceeded], [onFailed], or [onDismissed] per
+ * `authenticate(...)` call. Dismissal leaves the host request pending.
  */
 public interface BiometricGateCallback {
+    /** The user dismissed biometrics; the request remains pending for manual retry. */
+    public fun onDismissed()
+
     /**
      * BiometricPrompt succeeded; [signatureBytes] is the 64-byte
      * Ed25519 signature over the challenge body the gate signed
@@ -218,7 +222,7 @@ public interface BiometricGateCallback {
     public fun onSucceeded(signatureBytes: ByteArray)
 
     /**
-     * BiometricPrompt was cancelled, errored, or never opened
+     * BiometricPrompt errored or never opened
      * (e.g. no enrolled fingerprint). [reason] is the human-
      * readable cause for the logcat audit trail.
      */
@@ -317,6 +321,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
 
     private var activeGate: BiometricGate? = null
     private var terminal: Boolean = false
+    private var autoPromptStarted: Boolean = false
     private var resolvedPeerId: String = ""
     private var resolvedHostname: String = ""
     private var resolvedChallenge: ByteArray = ByteArray(0)
@@ -356,10 +361,18 @@ public class ChallengeApprovalActivity : FragmentActivity() {
         val promptText = "$hostname is requesting sudo (peer_id $short)"
         lastPromptText = promptText
         Log.i(APPROVAL_LOG_TAG, "render peer=$peerId host=$hostname")
-        setContent { ApprovalContent(promptText = promptText, onApprove = ::onApproveClicked, onCancel = ::onCancelClicked) }
+        setContent { ApprovalContent(promptText = promptText, onAuthorize = ::startAuthentication, onCancel = ::onCancelClicked) }
     }
 
-    /** Test seam: invoked by the Compose Cancel button. */
+    override fun onResume() {
+        super.onResume()
+        if (!autoPromptStarted) {
+            autoPromptStarted = true
+            startAuthentication()
+        }
+    }
+
+    /** Test seam: invoked by the Compose Disallow button. */
     internal fun onCancelClicked() {
         if (terminal) return
         terminal = true
@@ -370,13 +383,12 @@ public class ChallengeApprovalActivity : FragmentActivity() {
     }
 
     /**
-     * Test seam: invoked by the Compose Approve button. S-015 wires
-     * the [BiometricGate] + Keystore-sign + response-write path.
-     * Each invocation produces exactly one BiometricPrompt round
-     * (per-use Keystore key contract per SPEC §3.2 D6).
+     * Open one biometric operation, automatically on first resume or on Authorize.
+     * A resume while the prompt is open must not start another signing operation.
+     * The per-use Keystore key still requires a successful strong biometric.
      */
-    internal fun onApproveClicked() {
-        if (terminal) return
+    internal fun startAuthentication() {
+        if (terminal || isFinishing || activeGate != null) return
         Log.i(APPROVAL_LOG_TAG, "approve peer=$resolvedPeerId alias=$resolvedKeystoreAlias")
         // Test override on the companion seam takes precedence over
         // the per-instance production gate so a Robolectric JVM test
@@ -391,12 +403,24 @@ public class ChallengeApprovalActivity : FragmentActivity() {
             resolvedKeystoreAlias,
             resolvedChallenge,
             object : BiometricGateCallback {
+                private var completed = false
+
+                override fun onDismissed() {
+                    if (completed) return
+                    completed = true
+                    if (!terminal) activeGate = null
+                }
+
                 override fun onSucceeded(signatureBytes: ByteArray) {
+                    if (completed) return
+                    completed = true
                     Log.i(APPROVAL_LOG_TAG, "approve sig ok peer=$resolvedPeerId len=${signatureBytes.size}")
                     writeResponseAndFinish(signatureBytes)
                 }
 
                 override fun onFailed(reason: String) {
+                    if (completed) return
+                    completed = true
                     Log.i(APPROVAL_LOG_TAG, "approve fail peer=$resolvedPeerId reason=$reason")
                     writeResponseAndFinish(DENIED_FRAME_BYTES)
                 }
@@ -426,7 +450,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
 
     public companion object {
         /**
-         * Sink the activity calls on Cancel. Production sets this from
+         * Sink the activity calls on Disallow. Production sets this from
          * `MainActivity.installCompanionSeams`; tests inject a recording
          * fake. `@Volatile` because the activity (main thread) reads and
          * the service-side installer (binder thread) writes.
@@ -585,7 +609,12 @@ internal class AndroidBiometricGate(
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                callback.onFailed("[$errorCode] $errString")
+                when (errorCode) {
+                    BiometricPrompt.ERROR_USER_CANCELED,
+                    BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+                    BiometricPrompt.ERROR_CANCELED -> callback.onDismissed()
+                    else -> callback.onFailed("[$errorCode] $errString")
+                }
             }
 
             override fun onAuthenticationFailed() {
@@ -627,21 +656,21 @@ private val APPROVAL_PADDING_DP = 24.dp
 /** Vertical gap between sections (icon → prompt → buttons). */
 private val APPROVAL_SECTION_SPACING_DP = 16.dp
 
-/** Vertical gap between the Approve and Cancel buttons. */
+/** Vertical gap between the Authorize and Disallow buttons. */
 private val APPROVAL_BUTTON_SPACING_DP = 12.dp
 
 /** Lock-icon diameter at the top of the screen. */
 private val APPROVAL_ICON_SIZE_DP = 72.dp
 
-/** Primary-button height; matches prrr-android's Connect button (56.dp). */
+/** Approval-button height (56.dp). */
 private val APPROVAL_BUTTON_HEIGHT_DP = 56.dp
 
-/** Horizontal inset around the full-width Approve / Cancel buttons. */
+/** Horizontal inset around the full-width approval buttons. */
 private val APPROVAL_BUTTON_HORIZONTAL_PADDING_DP = 24.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ApprovalContent(promptText: String, onApprove: () -> Unit, onCancel: () -> Unit) {
+private fun ApprovalContent(promptText: String, onAuthorize: () -> Unit, onCancel: () -> Unit) {
     SyauthTheme {
         Scaffold(
             topBar = {
@@ -690,19 +719,10 @@ private fun ApprovalContent(promptText: String, onApprove: () -> Unit, onCancel:
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Button(
-                            onClick = onApprove,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(APPROVAL_BUTTON_HEIGHT_DP),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary,
-                            ),
+                            onClick = onAuthorize,
+                            modifier = Modifier.fillMaxWidth().height(APPROVAL_BUTTON_HEIGHT_DP),
                         ) {
-                            Text(
-                                text = "Approve",
-                                style = MaterialTheme.typography.titleMedium,
-                            )
+                            Text(text = "Authorize", style = MaterialTheme.typography.titleMedium)
                         }
                         Spacer(modifier = Modifier.height(APPROVAL_BUTTON_SPACING_DP))
                         OutlinedButton(
@@ -715,7 +735,7 @@ private fun ApprovalContent(promptText: String, onApprove: () -> Unit, onCancel:
                             ),
                         ) {
                             Text(
-                                text = "Cancel",
+                                text = "Disallow",
                                 style = MaterialTheme.typography.titleMedium,
                             )
                         }

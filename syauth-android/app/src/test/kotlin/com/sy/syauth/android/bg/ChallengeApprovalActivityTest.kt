@@ -22,6 +22,7 @@ package com.sy.syauth.android.bg
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -56,6 +57,14 @@ private fun fixtureIntent(): Intent {
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ChallengeApprovalActivityTest {
+
+    @Before
+    fun setup() {
+        ChallengeApprovalActivity.biometricGate = object : BiometricGate {
+            override fun cancel() = Unit
+            override fun authenticate(keystoreAlias: String, challengeBytes: ByteArray, callback: BiometricGateCallback) = Unit
+        }
+    }
 
     @After
     fun cleanup() {

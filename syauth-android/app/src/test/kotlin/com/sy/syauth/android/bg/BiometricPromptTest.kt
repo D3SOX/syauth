@@ -7,7 +7,7 @@
 //      `BiometricPrompt.PromptInfo.allowedAuthenticators` equals
 //      `BiometricManager.Authenticators.BIOMETRIC_STRONG` and
 //      carries no DEVICE_CREDENTIAL bit.
-//   2. `per_use_keystore_unlock` — a second Approve tap requires
+//   2. `per_use_keystore_unlock` — a second request requires
 //      a second `BiometricGate.authenticate(...)` call (the
 //      Keystore key was released for exactly one use per
 //      BiometricPrompt round; no cached signature reuse).
@@ -28,6 +28,7 @@ import android.content.Intent
 import androidx.biometric.BiometricManager
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -77,6 +78,11 @@ private class RecordingBiometricGate : BiometricGate {
         cb.onSucceeded(signatureBytes)
     }
 
+    fun dismiss() {
+        val cb = lastCallback ?: error("gate.authenticate was not called")
+        cb.onDismissed()
+    }
+
     fun fail(reason: String) {
         val cb = lastCallback ?: error("gate.authenticate was not called")
         cb.onFailed(reason)
@@ -97,10 +103,101 @@ private fun fixtureIntent(): Intent {
 @Config(sdk = [34])
 class BiometricPromptTest {
 
+    @Before
+    fun setup() {
+        ChallengeApprovalActivity.biometricGate = RecordingBiometricGate()
+    }
+
     @After
     fun cleanup() {
         ChallengeApprovalActivity.resetSeams()
         SyauthCompanionService.resetSeams()
+    }
+
+    @Test
+    fun request_opens_biometrics_once_without_an_approve_tap() {
+        val gate = RecordingBiometricGate()
+        val sink = RecordingResponseSink()
+        ChallengeApprovalActivity.biometricGate = gate
+        ChallengeApprovalActivity.responseSink = sink
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+
+        assertEquals("request opens the fingerprint prompt", 1, gate.callCount)
+        assertTrue("opening a prompt does not authorize", sink.calls.isEmpty())
+        controller.pause().resume()
+        assertEquals("resuming does not open a duplicate prompt", 1, gate.callCount)
+        gate.succeed(FIXTURE_SIGNATURE)
+        assertEquals(1, sink.calls.size)
+        assertArrayEquals(FIXTURE_SIGNATURE, sink.calls.single().second)
+        controller.pause().stop().destroy()
+    }
+
+    @Test
+    fun dismissing_biometrics_returns_to_approval_and_allows_manual_retry() {
+        val gate = RecordingBiometricGate()
+        val sink = RecordingResponseSink()
+        ChallengeApprovalActivity.biometricGate = gate
+        ChallengeApprovalActivity.responseSink = sink
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+        val activity = controller.get()
+
+        val dismissedCallback = gate.lastCallback!!
+        gate.dismiss()
+        dismissedCallback.onSucceeded(FIXTURE_SIGNATURE)
+
+        assertTrue("dismissal returns to the approval screen", !activity.isFinishing)
+        assertTrue("dismissal does not reject or authorize", sink.calls.isEmpty())
+        controller.pause().resume()
+        assertEquals("returning to the screen does not reopen biometrics", 1, gate.callCount)
+        activity.startAuthentication()
+        assertEquals("Authorize can reopen biometrics", 2, gate.callCount)
+        dismissedCallback.onSucceeded(FIXTURE_SIGNATURE)
+        assertTrue("a dismissed operation cannot answer a retry", sink.calls.isEmpty())
+        gate.succeed(FIXTURE_SIGNATURE)
+        assertEquals(1, sink.calls.size)
+        assertArrayEquals(FIXTURE_SIGNATURE, sink.calls.single().second)
+        controller.pause().stop().destroy()
+    }
+
+    @Test
+    fun disallow_rejects_the_request_after_biometrics_are_dismissed() {
+        val gate = RecordingBiometricGate()
+        val responses = RecordingResponseSink()
+        var denied = 0
+        ChallengeApprovalActivity.biometricGate = gate
+        ChallengeApprovalActivity.responseSink = responses
+        ChallengeApprovalActivity.cancelSink = CancelSink { peerId, bytes ->
+            assertEquals(FIXTURE_PEER_ID, peerId)
+            assertArrayEquals(DENIED_FRAME_BYTES, bytes)
+            denied += 1
+        }
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+        gate.dismiss()
+
+        controller.get().onCancelClicked()
+        gate.succeed(FIXTURE_SIGNATURE)
+
+        assertEquals(1, denied)
+        assertTrue(controller.get().isFinishing)
+        assertTrue(responses.calls.isEmpty())
+        controller.pause().stop().destroy()
+    }
+
+    @Test
+    fun missing_request_extras_do_not_open_biometrics() {
+        val gate = RecordingBiometricGate()
+        ChallengeApprovalActivity.biometricGate = gate
+        val controller = Robolectric.buildActivity(
+            ChallengeApprovalActivity::class.java,
+            fixtureIntent().apply { removeExtra(EXTRA_HOSTNAME) },
+        ).create().start().resume()
+
+        assertTrue(controller.get().isFinishing)
+        assertEquals(0, gate.callCount)
+        controller.pause().stop().destroy()
     }
 
     @Test
@@ -131,27 +228,18 @@ class BiometricPromptTest {
             ChallengeApprovalActivity::class.java,
             fixtureIntent(),
         ).create().start().resume()
-        val activity = controller.get()
-
-        activity.onApproveClicked()
-        assertEquals("first Approve invokes gate exactly once", 1, gate.callCount)
+        assertEquals("first request invokes gate exactly once", 1, gate.callCount)
         gate.succeed(FIXTURE_SIGNATURE)
 
-        // The activity should finish after the first sign;
-        // a second Approve tap on the same activity would normally
-        // be a no-op because `isFinishing == true`. Per-use
-        // semantics: simulate a fresh activity round and assert a
-        // second authenticate call is required.
+        // A fresh request must perform a new per-use biometric operation.
         ChallengeApprovalActivity.biometricGate = gate
         val secondController = Robolectric.buildActivity(
             ChallengeApprovalActivity::class.java,
             fixtureIntent(),
         ).create().start().resume()
-        val secondActivity = secondController.get()
-        secondActivity.onApproveClicked()
         gate.succeed(SECOND_FIXTURE_SIGNATURE)
 
-        assertEquals("each Approve round invokes gate exactly once", 2, gate.callCount)
+        assertEquals("each request invokes gate exactly once", 2, gate.callCount)
         assertEquals(2, sink.calls.size)
         assertArrayEquals(
             "first response carries the first signature",
@@ -163,6 +251,8 @@ class BiometricPromptTest {
             SECOND_FIXTURE_SIGNATURE,
             sink.calls[1].second,
         )
+        controller.pause().stop().destroy()
+        secondController.pause().stop().destroy()
     }
 
     @Test
@@ -177,8 +267,7 @@ class BiometricPromptTest {
         ).create().start().resume()
         val activity = controller.get()
 
-        activity.onApproveClicked()
-        gate.fail("user cancel")
+        gate.fail("keystore unavailable")
 
         assertEquals("fail path writes exactly one response", 1, sink.calls.size)
         assertEquals(FIXTURE_PEER_ID, sink.calls[0].first)
@@ -198,7 +287,6 @@ class BiometricPromptTest {
         val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
             .create().start().resume()
         val activity = controller.get()
-        activity.onApproveClicked()
         val nonce = ByteArray(FIXTURE_CHALLENGE_LEN) { it.toByte() }.copyOfRange(1, 17)
         SyauthCompanionService.cancelledApproval.value = FIXTURE_PEER_ID to nonce
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
@@ -232,6 +320,8 @@ class BiometricPromptTest {
 
     @Test
     fun verified_cancel_received_before_activity_launch_dismisses_matching_nonce() {
+        val gate = RecordingBiometricGate()
+        ChallengeApprovalActivity.biometricGate = gate
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val frame = ByteArray(39)
         ByteArray(FIXTURE_CHALLENGE_LEN) { it.toByte() }.copyInto(frame, endIndex = 17)
@@ -242,6 +332,7 @@ class BiometricPromptTest {
             .create().start().resume()
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         assertTrue(controller.get().isFinishing)
+        assertEquals("cancelled request must not open biometrics", 0, gate.callCount)
         controller.pause().stop().destroy()
     }
 
