@@ -150,6 +150,14 @@ pub enum PeripheralError {
         reason: String,
     },
 
+    /// The phone has not subscribed yet, or a rebuilt GATT service awaits
+    /// resubscription. The caller may retry the same challenge.
+    #[error("no active GATT subscription for peer_id={peer_id}")]
+    NotSubscribed {
+        /// The peer whose notification subscription is not ready.
+        peer_id: String,
+    },
+
     /// `wait_for_response(peer_id, deadline)` reached its deadline
     /// without observing a write on the per-peer response
     /// characteristic. Distinct from `Backend` so the orchestrator's
@@ -212,7 +220,8 @@ pub trait Peripheral: Send + Sync {
 
     /// Push challenge bytes on the per-peer challenge characteristic.
     /// Returns [`PeripheralError::UnknownPeer`] if `peer_id` was never
-    /// added.
+    /// added, or [`PeripheralError::NotSubscribed`] while the phone's
+    /// notification subscription is unavailable.
     async fn notify_challenge(&self, peer_id: &str, frame: &[u8]) -> Result<(), PeripheralError>;
 
     /// Await a single GATT-write on the per-peer response
@@ -979,9 +988,8 @@ impl Peripheral for PersistentPeripheral {
         drop(peers);
         let mut slot = notifier_slot.lock().await;
         let Some(writer) = slot.as_mut() else {
-            tracing::warn!(target: "syauth_transport", peer_id=%peer_id, "notify_challenge: notifier_slot=None — phone never subscribed (or task missed event)");
-            return Err(PeripheralError::Backend {
-                reason: format!("no active GATT subscription for peer_id={peer_id}"),
+            return Err(PeripheralError::NotSubscribed {
+                peer_id: peer_id.to_owned(),
             });
         };
         use tokio::io::AsyncWriteExt;
@@ -1007,9 +1015,8 @@ impl Peripheral for PersistentPeripheral {
                 // drop, which discards BlueZ's subscription state. The fresh
                 // registration's chal_control stream then emits `Notify` the
                 // first time the (kicked) phone re-subscribes against it.
-                // This call still fails (FIDO takes over once), but the
-                // next challenge after the phone watchdog reconnects lands
-                // on a healthy writer.
+                // The caller retries the same challenge while the phone
+                // resubscribes, within the original authentication deadline.
                 tracing::warn!(
                     target: "syauth_transport",
                     peer_id = %peer_id,
@@ -1018,16 +1025,9 @@ impl Peripheral for PersistentPeripheral {
                 );
                 *slot = None;
                 drop(slot);
-                if let Err(rebuild_err) = self.rebuild_peer_registration(peer_id).await {
-                    tracing::warn!(
-                        target: "syauth_transport",
-                        peer_id = %peer_id,
-                        error = %rebuild_err,
-                        "notify_challenge recovery: rebuild_peer_registration failed"
-                    );
-                }
-                Err(PeripheralError::Backend {
-                    reason: format!("notify_challenge write: {err}"),
+                self.rebuild_peer_registration(peer_id).await?;
+                Err(PeripheralError::NotSubscribed {
+                    peer_id: peer_id.to_owned(),
                 })
             }
         }

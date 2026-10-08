@@ -48,6 +48,31 @@ the daemon must create its socket and pidfile under `/run/user/UID/syauth`.
 `/usr/lib/security` is the PAM module directory on Arch; `/usr/lib64/security`
 from the earlier README instructions was incorrect for this installation.
 
+### Update the daemon without administrator access
+
+The daemon runs as your user. You can install updates in your home directory and
+override the unit's executable path. This was also used on the tested laptop:
+
+```sh
+cargo build --release --locked -p syauth-presenced
+install -Dm755 target/release/syauth-presenced ~/.local/libexec/syauth-presenced
+mkdir -p ~/.config/systemd/user/syauth-presenced.service.d
+cat > ~/.config/systemd/user/syauth-presenced.service.d/binary.conf <<'UNIT'
+[Service]
+ExecStart=
+ExecStart=%h/.local/libexec/syauth-presenced
+UNIT
+systemctl --user daemon-reload
+systemctl --user restart syauth-presenced
+systemctl --user status syauth-presenced
+```
+
+Keep the runtime and phone drop-ins. Later daemon updates only need the build,
+install, and restart commands. Updating the daemon does not change PAM rules,
+pairing keys, or the pacman checker's baseline. To return to the executable in
+the original unit, remove `binary.conf`, reload the user manager, and restart
+the service.
+
 ## Build and install Android
 
 Gradle needs the native AAR and generated Kotlin bindings first. A plain

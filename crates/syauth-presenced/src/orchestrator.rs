@@ -921,12 +921,6 @@ impl Orchestrator {
                 reason: format!("encode challenge frame: {err}"),
             });
         }
-        if let Err(err) = self.peripheral.notify_challenge(peer_id, &encoded).await {
-            let t_end_ms = epoch_millis(SystemTime::now());
-            let reason = challenge_outcome_for_transport(&err).reason_str();
-            self.audit_at(peer_id, &nonce_hex, t_start_ms, t_end_ms, reason).await;
-            return challenge_outcome_for_transport(&err);
-        }
         let response = tokio::select! {
             biased;
             () = cancelled => {
@@ -935,7 +929,26 @@ impl Orchestrator {
                 self.audit_at(peer_id, &nonce_hex, t_start_ms, t_end_ms, "cancelled").await;
                 return ChallengeOutcome::Cancelled;
             }
-            response = self.peripheral.wait_for_response(peer_id, deadline) => response,
+            response = tokio::time::timeout(deadline, async {
+                let mut waiting_logged = false;
+                loop {
+                    match self.peripheral.notify_challenge(peer_id, &encoded).await {
+                        Ok(()) => break,
+                        Err(PeripheralError::NotSubscribed { .. }) => {
+                            if !waiting_logged {
+                                tracing::info!(peer_id, "waiting for phone notification subscription");
+                                waiting_logged = true;
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                self.peripheral.wait_for_response(peer_id, deadline).await
+            }) => response.unwrap_or_else(|_| Err(PeripheralError::ResponseTimeout {
+                peer_id: peer_id.to_owned(),
+                deadline_ms: u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
+            })),
         };
         let response_bytes = match response {
             Ok(b) => b,

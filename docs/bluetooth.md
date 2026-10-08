@@ -71,6 +71,12 @@ tests cover stalled discovery, failed and successful subscriptions, service
 changes, and callbacks from a closed connection. The reconnect tests run on
 API 26 and 34; the service-change callback test runs on API 34.
 
+The updated daemon also passed a first-request recovery test on that Pixel:
+an empty-password PAM request started immediately after a daemon restart,
+waited for the phone's subscription, and accepted a fingerprint in 2.6 seconds.
+The daemon tests cover subscription recovery in the same request, a shared
+eight-second deadline, cancellation during recovery, and an absent phone.
+
 ## Emulator transport test
 
 The transport test passed on Android 15/API 35 with Emulator 37.1.11. A
@@ -139,11 +145,20 @@ requests. If an empty KDE submission fails immediately, inspect the daemon log:
 journalctl --user -u syauth-presenced --since '5 minutes ago' --no-pager
 ```
 
-`no active GATT subscription` or `notifier_slot=None` means the request could not
-reach the phone. A dead notification writer causes the daemon to rebuild its
-GATT service. Leave the phone in range with Bluetooth enabled and allow its
-connection watchdog to retry, then submit the empty field again. On an older
-app that stays connected without resubscribing, reopen the app after restarting
+The current daemon logs `waiting for phone notification subscription` when the
+phone is not ready. A dead notification writer causes it to rebuild its GATT
+service and retry the same challenge while the phone subscribes again. Recovery
+and fingerprint approval share the original eight-second authentication deadline;
+recovery does not extend that deadline. Cancellation stops the pending request.
+
+If the BLE link itself has disconnected, reconnecting can take longer than eight
+seconds. Leave the phone in range with Bluetooth enabled, allow its connection
+watchdog to retry, then submit the empty field again. You can use the laptop
+password after a phone request times out.
+
+Older daemons fail immediately with `no active GATT subscription` or
+`notifier_slot=None`. Update both the daemon and Android app. On an older app
+that stays connected without resubscribing, reopen the app after restarting
 the daemon:
 
 ```sh

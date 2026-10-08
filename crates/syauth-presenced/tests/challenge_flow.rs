@@ -37,7 +37,7 @@ use syauth_presenced::{
     AuditLog, ChallengeOutcome, DEFAULT_AUTH_TIMEOUT, OUTCOME_REASON_BAD_SIGNATURE, OUTCOME_REASON_OK, OUTCOME_REASON_RESPONSE_TIMEOUT,
     Orchestrator,
 };
-use syauth_transport::{BOND_KEY_BYTES, FakePeripheral, Peripheral};
+use syauth_transport::{BOND_KEY_BYTES, FakePeripheral, Peripheral, PeripheralError};
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use tokio::time::Instant;
@@ -88,11 +88,10 @@ fn open_audit_log(tempdir: &TempDir) -> (AuditLog, PathBuf) {
 /// Construct an orchestrator carrying one bond with an attached
 /// audit log. `tokio::time::Instant::now()` is captured so the
 /// rotation timer never fires during the test.
-async fn build_orchestrator(fake: Arc<FakePeripheral>, bond: Bond, audit_log: AuditLog) -> Arc<Orchestrator> {
-    let peripheral: Arc<dyn Peripheral + Send + Sync> = fake.clone();
+async fn build_orchestrator(peripheral: Arc<dyn Peripheral>, bond: Bond, audit_log: AuditLog) -> Arc<Orchestrator> {
     let start = Instant::now() + Duration::from_secs(syauth_presenced::SECONDS_PER_MINUTE);
     let orchestrator = Arc::new(Orchestrator::with_peers_and_audit(
-        peripheral,
+        peripheral.clone(),
         vec![(bond.clone(), BOND_KEY)],
         PathBuf::new(),
         PathBuf::new(),
@@ -101,8 +100,136 @@ async fn build_orchestrator(fake: Arc<FakePeripheral>, bond: Bond, audit_log: Au
     ));
     // Register the peer with the fake so notify_challenge /
     // wait_for_response find the peer entry.
-    fake.add_peer(&bond.peer_id, &BOND_KEY).await.expect("fake add_peer");
+    peripheral.add_peer(&bond.peer_id, &BOND_KEY).await.expect("fake add_peer");
     orchestrator
+}
+
+/// Model a GATT rebuild which finishes resubscribing later in the same request.
+struct ReconnectingPeripheral {
+    fake: Arc<FakePeripheral>,
+    ready_at: Instant,
+}
+
+#[async_trait::async_trait]
+impl Peripheral for ReconnectingPeripheral {
+    async fn add_peer(&self, peer_id: &str, bond_key: &[u8; BOND_KEY_BYTES]) -> Result<(), PeripheralError> {
+        self.fake.add_peer(peer_id, bond_key).await
+    }
+
+    async fn remove_peer(&self, peer_id: &str) -> Result<(), PeripheralError> {
+        self.fake.remove_peer(peer_id).await
+    }
+
+    async fn set_session_uuids(&self, uuids: std::collections::HashSet<uuid::Uuid>) -> Result<(), PeripheralError> {
+        self.fake.set_session_uuids(uuids).await
+    }
+
+    async fn notify_challenge(&self, peer_id: &str, frame: &[u8]) -> Result<(), PeripheralError> {
+        if Instant::now() < self.ready_at {
+            return Err(PeripheralError::NotSubscribed {
+                peer_id: peer_id.to_owned(),
+            });
+        }
+        self.fake.notify_challenge(peer_id, frame).await
+    }
+
+    async fn wait_for_response(&self, peer_id: &str, deadline: Duration) -> Result<Vec<u8>, PeripheralError> {
+        self.fake.wait_for_response(peer_id, deadline).await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn subscription_recovery_succeeds_in_the_first_challenge() {
+    let signing_key = SigningKey::from_bytes(&SIGNING_KEY_SEED);
+    let bond = fixture_bond(&signing_key);
+    let td = TempDir::new().expect("tempdir");
+    let (audit, path) = open_audit_log(&td);
+    let fake = FakePeripheral::new();
+    let peripheral = Arc::new(ReconnectingPeripheral {
+        fake: fake.clone(),
+        ready_at: Instant::now() + Duration::from_secs(3),
+    });
+    let orchestrator = build_orchestrator(peripheral, bond.clone(), audit).await;
+    let peer_id = bond.peer_id.clone();
+    let task = tokio::spawn(async move { orchestrator.issue_challenge(&peer_id, DEFAULT_AUTH_TIMEOUT).await });
+    tokio::task::yield_now().await;
+    assert!(
+        !task.is_finished(),
+        "A temporary missing subscription must not fail the first request"
+    );
+    tokio::time::advance(Duration::from_secs(3)).await;
+    let bytes = wait_until_notified_after(&fake, &bond.peer_id, 0).await;
+    fake.inject_response(&bond.peer_id, sign_notified_challenge(&bytes, &signing_key));
+    assert!(matches!(task.await.expect("challenge task"), ChallengeOutcome::Ok { .. }));
+    assert_eq!(fake.notify_calls().len(), 1, "Deliver the challenge once after recovery");
+    assert_eq!(outcome_columns(&path), vec![OUTCOME_REASON_OK.to_owned()]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn subscription_recovery_and_response_share_the_original_deadline() {
+    let signing_key = SigningKey::from_bytes(&SIGNING_KEY_SEED);
+    let bond = fixture_bond(&signing_key);
+    let td = TempDir::new().expect("tempdir");
+    let (audit, _) = open_audit_log(&td);
+    let peripheral = Arc::new(ReconnectingPeripheral {
+        fake: FakePeripheral::new(),
+        ready_at: Instant::now() + Duration::from_secs(3),
+    });
+    let orchestrator = build_orchestrator(peripheral, bond.clone(), audit).await;
+    let start = Instant::now();
+    assert!(matches!(
+        orchestrator.issue_challenge(&bond.peer_id, DEFAULT_AUTH_TIMEOUT).await,
+        ChallengeOutcome::TimedOut
+    ));
+    assert_eq!(Instant::now() - start, DEFAULT_AUTH_TIMEOUT);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_while_waiting_for_subscription_never_sends_an_approval_request() {
+    let signing_key = SigningKey::from_bytes(&SIGNING_KEY_SEED);
+    let bond = fixture_bond(&signing_key);
+    let td = TempDir::new().expect("tempdir");
+    let (audit, _) = open_audit_log(&td);
+    let fake = FakePeripheral::new();
+    let peripheral = Arc::new(ReconnectingPeripheral {
+        fake: fake.clone(),
+        ready_at: Instant::now() + Duration::from_secs(60),
+    });
+    let orchestrator = build_orchestrator(peripheral, bond.clone(), audit).await;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        orchestrator
+            .issue_challenge_until(&bond.peer_id, DEFAULT_AUTH_TIMEOUT, None, async {
+                let _ = rx.await;
+            })
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished(), "Wait for resubscription or cancellation");
+    tx.send(()).expect("cancel request");
+    assert!(matches!(task.await.expect("challenge task"), ChallengeOutcome::Cancelled));
+    assert!(fake.notify_calls().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn absent_subscription_times_out_without_sending_a_request() {
+    let signing_key = SigningKey::from_bytes(&SIGNING_KEY_SEED);
+    let bond = fixture_bond(&signing_key);
+    let td = TempDir::new().expect("tempdir");
+    let (audit, _) = open_audit_log(&td);
+    let fake = FakePeripheral::new();
+    let peripheral = Arc::new(ReconnectingPeripheral {
+        fake: fake.clone(),
+        ready_at: Instant::now() + Duration::from_secs(60),
+    });
+    let orchestrator = build_orchestrator(peripheral, bond.clone(), audit).await;
+    let start = Instant::now();
+    assert!(matches!(
+        orchestrator.issue_challenge(&bond.peer_id, DEFAULT_AUTH_TIMEOUT).await,
+        ChallengeOutcome::TimedOut
+    ));
+    assert_eq!(Instant::now() - start, DEFAULT_AUTH_TIMEOUT);
+    assert!(fake.notify_calls().is_empty());
 }
 
 /// Decode the challenge frame the orchestrator notified, sign its
