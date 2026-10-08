@@ -1,6 +1,6 @@
 //! Runtime configuration for `pam_sm_authenticate`.
 //!
-//! S-008 reduces the configuration surface to two knobs:
+//! Runtime configuration:
 //!
 //! - [`Config::bond_dir`] — directory holding `bonds.toml` and `last.log`.
 //!   Defaults to [`DEFAULT_BOND_DIR`] (SPEC §4.4); overridable for tests via
@@ -13,6 +13,8 @@
 //!   (SPEC §8 Risks row). Overridable via the libpam `socket=<path>`
 //!   argument so test harnesses can point at a mock daemon
 //!   (SPEC §3 scope item #12).
+//! - [`Config::on_empty_password`] waits for a submission before contacting
+//!   the daemon. Nonempty passwords remain cached for the password module.
 //!
 //! The legacy S-009 `mock_peer_enabled`, `adapter_id`, and
 //! `response_timeout` knobs are gone — `pam_sm_authenticate` no longer
@@ -70,6 +72,8 @@ pub const PAM_SOCKET_ARG_PREFIX: &str = "socket=";
 /// (`Config::default().with_bond_dir(...)`).
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Wait for a password submission; only an empty response requests the phone.
+    pub on_empty_password: bool,
     /// Directory holding `bonds.toml` and `last.log`.
     pub bond_dir: PathBuf,
     /// Path to the daemon's Unix-domain socket. Defaults to
@@ -84,6 +88,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            on_empty_password: false,
             bond_dir: PathBuf::from(DEFAULT_BOND_DIR),
             socket_path: Self::resolve_socket_path(None),
             auth_timeout: DEFAULT_AUTH_TIMEOUT,
@@ -93,7 +98,7 @@ impl Default for Config {
 
 impl Config {
     /// Parse the libpam `argv` for the documented arguments (currently
-    /// only `socket=<path>`) and assemble a `Config`. Unknown
+    /// `socket=<path>` and `on_empty_password`) and assemble a `Config`. Unknown
     /// arguments are silently ignored — libpam stacks frequently
     /// carry arguments destined for other modules and rejecting them
     /// would break composition.
@@ -104,6 +109,7 @@ impl Config {
             .find_map(|arg| arg.strip_prefix(PAM_SOCKET_ARG_PREFIX))
             .map(PathBuf::from);
         Self {
+            on_empty_password: argv.contains(&"on_empty_password"),
             bond_dir: PathBuf::from(DEFAULT_BOND_DIR),
             socket_path: Self::resolve_socket_path(socket_override),
             auth_timeout: DEFAULT_AUTH_TIMEOUT,
@@ -140,6 +146,7 @@ impl Config {
     #[must_use]
     pub fn for_tests(bond_dir: &Path) -> Self {
         Self {
+            on_empty_password: false,
             bond_dir: bond_dir.to_path_buf(),
             socket_path: bond_dir.join(DEFAULT_SOCKET_BASENAME),
             auth_timeout: DEFAULT_AUTH_TIMEOUT,
@@ -188,6 +195,13 @@ mod tests {
     // Journey: specs/journeys/JOURNEY-S-008-pam-unix-socket-client.md
 
     use super::*;
+
+    #[test]
+    fn empty_password_mode_requires_the_exact_option() {
+        assert!(!Config::default().on_empty_password);
+        assert!(!Config::from_pam_argv(&["on_empty_password=false"]).on_empty_password);
+        assert!(Config::from_pam_argv(&["on_empty_password"]).on_empty_password);
+    }
 
     /// TC-12: the PAM module's argv parser picks up `socket=<path>`.
     #[test]

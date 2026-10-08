@@ -2,9 +2,11 @@
 
 This procedure was tested on Arch Linux, Plasma/kscreenlocker 6.7.91, and a
 Pixel 8 Pro running Android 16. It enables sudo and KDE screen unlock for one
-local user. KDE's password field remains usable while phone approval is pending;
-password unlock cancels the phone dialog. Login/SDDM and global PAM stacks are
-outside this procedure.
+local user. Choose empty-field Enter for manual phone requests or the parallel
+fingerprint stack for automatic requests in the [PAM guide](pam.md).
+The parallel setup permits password unlock while phone approval waits and
+cancels its pending dialog. Login/SDDM and global PAM stacks are outside this
+procedure.
 
 ## Desktop binaries and storage
 

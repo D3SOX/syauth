@@ -9,8 +9,9 @@
 //! `pam_sm_authenticate` is a thin Unix-socket RPC client to the
 //! `syauth-presenced` daemon (SPEC §3 scope item #11). The PAM module
 //! no longer drives BlueZ directly; the daemon owns the GATT + advertise
-//! stack and the heavy crypto. The module's only knob is the
-//! `socket=<path>` libpam argument (SPEC §3 scope item #12). On
+//! stack and the heavy crypto. `socket=<path>` selects the daemon socket.
+//! `on_empty_password` waits for a submission and requests the phone only
+//! for an empty response, leaving typed passwords for the next module. On
 //! socket-missing / connect-refused / write-fail / response-timeout it
 //! returns `PAM_AUTHINFO_UNAVAIL` within ≤ 50 ms (SPEC §4.3
 //! daemon-down latency) so the stack falls through to FIDO / password.
@@ -39,3 +40,4 @@
 pub mod auth;
 pub mod config;
 pub mod entry;
+mod submission;

@@ -24,7 +24,7 @@ use std::{
 
 use syslog::{Facility, Formatter3164};
 
-use crate::{auth, config::Config};
+use crate::{auth, config::Config, submission};
 
 // -----------------------------------------------------------------------------
 // PAM return-code constants
@@ -33,8 +33,7 @@ use crate::{auth, config::Config};
 // We pin a minimum subset of the libpam return codes locally rather than
 // pulling in `pam-sys` for four integers. The values are the canonical
 // Linux-PAM constants from `<security/_pam_types.h>` and are ABI-stable.
-// When S-009 starts calling into libpam (e.g. `pam_get_item`) we can revisit
-// and pull a curated binding then.
+// Conversation code uses pam-sys for libpam's types and item constants.
 
 /// `PAM_SUCCESS` — the call succeeded.
 pub const PAM_SUCCESS: c_int = 0;
@@ -48,9 +47,8 @@ pub const PAM_AUTH_ERR: c_int = 7;
 /// this code, which is exactly what we want when the phone isn't reachable.
 pub const PAM_AUTHINFO_UNAVAIL: c_int = 9;
 
-/// `PAM_IGNORE` — included for completeness and so S-009 does not need to
-/// touch this constant block when it adds a "module disabled in config"
-/// path. **Unused in S-008.**
+/// `PAM_IGNORE` — a nonempty submission selects the next password module
+/// when `on_empty_password` is enabled.
 pub const PAM_IGNORE: c_int = 25;
 
 // -----------------------------------------------------------------------------
@@ -165,10 +163,8 @@ where
 ///   of the call.
 /// * `argv` is either null or points to `argc` valid `*const c_char` entries.
 ///
-/// In the S-008 stub we read neither pointer; the parameters exist to match
-/// the ABI signature.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pam_sm_authenticate(_pamh: *mut c_void, _flags: c_int, argc: c_int, argv: *const *const c_char) -> c_int {
+pub unsafe extern "C" fn pam_sm_authenticate(pamh: *mut c_void, _flags: c_int, argc: c_int, argv: *const *const c_char) -> c_int {
     run_entry(|| {
         // SAFETY: libpam guarantees `argv` is either null or points
         // to `argc` valid `*const c_char` entries. The helper
@@ -178,6 +174,18 @@ pub unsafe extern "C" fn pam_sm_authenticate(_pamh: *mut c_void, _flags: c_int, 
         let argv_strings = unsafe { collect_pam_argv(argc, argv) };
         let argv_refs: Vec<&str> = argv_strings.iter().map(String::as_str).collect();
         let cfg = Config::from_pam_argv(&argv_refs);
+        if cfg.on_empty_password {
+            // SAFETY: libpam owns this live handle throughout the entry point.
+            // The helper checks null and never retains a PAM-owned token.
+            if let Err(code) = unsafe { submission::request_phone(pamh.cast()) } {
+                log_info(if code == PAM_IGNORE {
+                    "syauth: unlock skipped reason=password-submitted"
+                } else {
+                    "syauth: unlock denied reason=submission-error"
+                });
+                return code;
+            }
+        }
         let outcome = auth::authenticate(&cfg);
         log_info(&format!(
             "syauth: unlock {} reason={} peer_id={}",

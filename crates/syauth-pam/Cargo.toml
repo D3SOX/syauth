@@ -21,6 +21,7 @@ path = "src/lib.rs"
 [dependencies]
 syslog = "7"
 libc = "0.2"
+pam-sys = "0.5.6"
 # S-008 — `BondStore` lookup still happens in PAM to pick the
 # `peer_id` for the wire frame. The bond_key + pubkey lookup paths
 # moved to the daemon (`syauth-presenced`).

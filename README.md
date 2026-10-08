@@ -26,7 +26,8 @@ authentication on the bonded phone for each request.
   authentication stack available. The default installer can add FIDO2; the
   Arch/KDE guide preserves existing password and fingerprint authentication.
 
-The fingerprint prompt opens automatically. Dismissing it returns to the
+The fingerprint prompt opens automatically when the phone receives a request.
+Dismissing it returns to the
 Authorize/Disallow screen. Authorize retries biometrics; Disallow declines.
 
 ---
@@ -77,13 +78,15 @@ Compare both the six-digit system Bluetooth code and the four-word app phrase.
 Tapping Done on the phone updates Home and starts its connection service without
 restarting the app. Then enable the desktop daemon.
 
-For KDE, use the parallel `kde-fingerprint` PAM service and preserve the normal
-`kde` password service. Password unlock automatically dismisses the pending
-phone approval. See [approval cancellation](docs/cancellation.md).
+KDE can request the phone when you press Enter with an empty password field,
+using the optional `on_empty_password` PAM argument. Typing a password uses
+normal password authentication. For automatic requests with simultaneous
+password unlock, use the parallel `kde-fingerprint` service instead. Both
+configurations are in the [PAM guide](docs/pam.md).
 
 The generic `install-pam` / `uninstall-pam` commands remain available for other
 PAM services. Review their output and the target distro's module paths before
-applying it; the per-user socket and KDE parallel stack need the explicit setup
+applying it; the per-user socket and KDE stack need the explicit setup
 above. The tested Arch module path is `/usr/lib/security/pam_syauth.so`.
 
 ## Bluetooth recovery
