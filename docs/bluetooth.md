@@ -37,8 +37,10 @@ and BlueZ's [device connection API](https://github.com/bluez/bluez/blob/master/d
    connections.
 3. Run `sudo -k; sudo true` while watching the Pixel and approve with a
    fingerprint. Only test KDE after sudo succeeds.
-4. Lock KDE with Meta+L and approve on the phone. Then repeat using the laptop
-   password and check that the phone dialog closes.
+4. With [empty-password KDE unlock](pam.md#kde-request-the-phone-with-an-empty-submission),
+   lock with Meta+L. The Pixel should stay quiet until you press Enter in the
+   empty password field. Approve with a fingerprint, then lock again and unlock
+   with the laptop password. The password submission should keep the Pixel quiet.
 5. Leave the phone idle with its screen off, then repeat sudo. Check that
    headphones remain connected throughout.
 
@@ -53,11 +55,21 @@ audio profiles disabled. Password unlock dismissed the pending phone dialog.
 The Pixel's Bluetooth diagnostics reported `ACL BR/EDR:N LE:Y` and an encrypted
 LE link after fingerprint approval. The audio and call profiles stayed disabled.
 
-The first request after the APK update hit a stale desktop notification writer.
-The daemon rebuilt its GATT service. Reopening the Android app after a force-stop
-restored its subscription, and the next fingerprint request succeeded. This
-update recovery still needs work; the checks above do not prove automatic
-reconnection after an APK update.
+An earlier APK update left a stale desktop notification writer. The daemon
+rebuilt its GATT service, but the phone stayed connected without a notification
+subscription. Restarting the phone service restored requests. The current client
+keeps its 15-second retry watchdog active through connection, service discovery,
+and notification setup. Only a successful challenge notification subscription
+stops retries. Android service-change events trigger discovery and subscription
+again. Callbacks from a closed connection cannot stop the new connection's retry.
+
+On the Pixel 8 Pro with Android 16, restarting the laptop daemon sent a service
+change while the BLE link stayed connected. The updated app rediscovered the
+service and subscribed without a phone app restart. Private empty-password PAM
+authentication also accepted a fingerprint with the updated app. JVM regression
+tests cover stalled discovery, failed and successful subscriptions, service
+changes, and callbacks from a closed connection. The reconnect tests run on
+API 26 and 34; the service-change callback test runs on API 34.
 
 ## Emulator transport test
 
@@ -119,6 +131,30 @@ physical devices. The peer exits after 180 seconds if no test completes.
 to use syauth.
 
 ## Recover stale GATT subscriptions
+
+A Bluetooth connection does not prove that the phone has subscribed to unlock
+requests. If an empty KDE submission fails immediately, inspect the daemon log:
+
+```sh
+journalctl --user -u syauth-presenced --since '5 minutes ago' --no-pager
+```
+
+`no active GATT subscription` or `notifier_slot=None` means the request could not
+reach the phone. A dead notification writer causes the daemon to rebuild its
+GATT service. Leave the phone in range with Bluetooth enabled and allow its
+connection watchdog to retry, then submit the empty field again. On an older
+app that stays connected without resubscribing, reopen the app after restarting
+the daemon:
+
+```sh
+systemctl --user restart syauth-presenced
+```
+
+The [pacman update checker](pam.md#check-the-setup-after-pacman-updates) checks
+installed PAM files, package versions, and module dependencies. It does not test
+the current Bluetooth connection or phone approval. A passing check does not
+rule out a stale subscription, and reconnecting the phone does not require a new
+update-check baseline.
 
 The desktop daemon reconnects only the phone explicitly configured through
 `SYAUTH_RECONNECT_DEVICE`. Leave it unset to disable forced reconnection;

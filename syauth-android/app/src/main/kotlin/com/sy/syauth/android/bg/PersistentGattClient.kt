@@ -174,19 +174,12 @@ public class PersistentGattClient internal constructor(
      */
     private val stopped: AtomicBoolean = AtomicBoolean(false)
 
-    /**
-     * Handler bound to the main looper, owned by the client. The
-     * disconnect-watchdog posts itself here on every
-     * `STATE_DISCONNECTED` and is removed on every `STATE_CONNECTED`.
-     * The main looper is fine for this — the runnable just calls
-     * `forceReconnect()` which dispatches to the BLE stack's own
-     * threads.
-     */
+    /** Retry incomplete connections and notification subscriptions on the main looper. */
     private val reconnectHandler: Handler = Handler(Looper.getMainLooper())
 
     /**
      * Watchdog that re-issues a fresh `connectGatt` if we are still
-     * disconnected after [RECONNECT_INTERVAL_MS]. Android's
+     * not subscribed after [RECONNECT_INTERVAL_MS]. Android's
      * `autoConnect=true` background scan has a very low duty cycle —
      * after Doze, screen-off, or a long out-of-range absence it can
      * take many minutes to re-acquire the peer on its own. A fresh
@@ -197,7 +190,7 @@ public class PersistentGattClient internal constructor(
      * The watchdog re-arms itself through `forceReconnect()` →
      * `start()` (which schedules the next tick), so a single tick
      * keeps the cadence going until the link is up. Successful
-     * reconnects clear it via `STATE_CONNECTED` in the callback, and
+     * subscriptions clear it after a successful CCCD write, and
      * `stop()` clears it directly. The `stopped` guard prevents a
      * tick that fires concurrently with `stop()` from reopening the
      * link.
@@ -207,7 +200,7 @@ public class PersistentGattClient internal constructor(
             if (stopped.get()) return
             Log.i(
                 PERSISTENT_GATT_LOG_TAG,
-                "watchdog: still disconnected after ${RECONNECT_INTERVAL_MS}ms — forcing reconnect"
+                "watchdog: notification setup incomplete after ${RECONNECT_INTERVAL_MS}ms; reconnecting"
             )
             forceReconnect()
         }
@@ -233,19 +226,16 @@ public class PersistentGattClient internal constructor(
             return
         }
         gatt.set(handle)
-        // BUG-20260528-0130 → BUG-20260528-2334: arm the reconnect
-        // watchdog NOW, not only on STATE_DISCONNECTED. A
-        // connectGatt(autoConnect=true) that never completes emits NO
-        // onConnectionStateChange callback at all (e.g. the desktop was
-        // mid-`serve_gatt_application` re-registration, briefly out of
-        // range, or Android's low-duty-cycle background scan stalled),
-        // so the disconnected-path scheduling never runs and the client
-        // would wedge forever in a never-completing scan — the desktop
-        // then audits notifier_slot=None / transport-error on every
-        // unlock. A fast successful connect cancels this pending tick via
-        // STATE_CONNECTED before it fires; a stalled connect is retried.
+        // A connected link cannot receive requests until notifications are enabled.
+        // Keep retrying if connection, discovery, or subscription never completes.
+        armReconnectWatchdog()
+    }
+
+    private fun armReconnectWatchdog() {
         reconnectHandler.removeCallbacks(reconnectRunnable)
-        reconnectHandler.postDelayed(reconnectRunnable, RECONNECT_INTERVAL_MS)
+        if (!stopped.get()) {
+            reconnectHandler.postDelayed(reconnectRunnable, RECONNECT_INTERVAL_MS)
+        }
     }
 
     /**
@@ -264,15 +254,9 @@ public class PersistentGattClient internal constructor(
     /**
      * Force a fresh GATT handshake against the bonded peer.
      *
-     * Used by [SyauthCompanionService] when CDM presence transitions
-     * `absent -> present` — the desktop daemon almost certainly
-     * restarted (`syauth-presenced` re-registers its GATT app on
-     * boot), and our cached service tree + CCCD subscription are now
-     * bound to the dead application registration. BlueZ does not
-     * broadcast a Service Changed indication on
-     * `serve_gatt_application` re-registration, so the Android stack
-     * never auto-invalidates the cache on its own; without an
-     * explicit teardown we silently miss every challenge that follows.
+     * The watchdog calls this when connection or notification setup stalls.
+     * A desktop GATT registration rebuild can invalidate cached service handles
+     * and subscriptions even while the phone remains connected.
      *
      * Sequence: disconnect → close → reopen with the same
      * `autoConnect=true` semantics as [start]. Idempotent; safe to
@@ -289,17 +273,9 @@ public class PersistentGattClient internal constructor(
     }
 
     /**
-     * Reflective wrapper around `BluetoothGatt.refresh()`. The method
-     * is `@hide` on AOSP but stable across every release since
-     * Android 4.x — it clears the per-device GATT service cache the
-     * OS keeps under `/data/misc/bluetooth/`. Without this, a fresh
-     * `connectGatt` will hand back the cached (stale) services and
-     * `discoverServices` is a no-op against the OS-level cache.
-     *
-     * Returns true on success, false on any reflection failure. We
-     * never throw — a failed refresh just means the next
-     * `discoverServices` may return cached data, which the
-     * absent→present-driven forceReconnect compensates for.
+     * Try to clear Android's cached GATT service handles before discovery.
+     * This hidden API may be unavailable; discovery and the watchdog still run
+     * when reflection fails.
      */
     private fun refreshGattCache(handle: BluetoothGatt): Boolean {
         return runCatching {
@@ -308,6 +284,16 @@ public class PersistentGattClient internal constructor(
         }.getOrElse { err ->
             Log.w(PERSISTENT_GATT_LOG_TAG, "gatt.refresh() reflection failed", err)
             false
+        }
+    }
+
+    private fun discoverServices(handle: BluetoothGatt) {
+        try {
+            if (!handle.discoverServices()) {
+                Log.w(PERSISTENT_GATT_LOG_TAG, "service discovery did not start; watchdog will retry")
+            }
+        } catch (error: SecurityException) {
+            Log.w(PERSISTENT_GATT_LOG_TAG, "Bluetooth permission unavailable during discovery", error)
         }
     }
 
@@ -327,24 +313,16 @@ public class PersistentGattClient internal constructor(
 
     private val gattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (stopped.get() || gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "conn state status=$status new=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    // Cancel any pending reconnect watchdog — we are
-                    // healthy again. (No-op if none was scheduled.)
-                    reconnectHandler.removeCallbacks(reconnectRunnable)
-                    // Always invalidate the on-disk GATT service cache before
-                    // re-discovering. The desktop daemon may have re-registered
-                    // its GATT app while we held the link alive (e.g. an apt
-                    // upgrade or a `systemctl restart syauth-presenced`); the
-                    // cached handles point at a dead registration, and BlueZ
-                    // does not send a Service Changed indication on
-                    // `serve_gatt_application` swap. `refresh()` clears the
-                    // cache so the upcoming `discoverServices()` actually
-                    // talks to the wire.
+                    armReconnectWatchdog()
+                    // The desktop may have rebuilt its GATT registration during
+                    // disconnection. Discard cached handles before discovery.
                     val refreshed = refreshGattCache(g)
                     Log.i(PERSISTENT_GATT_LOG_TAG, "conn state: gatt.refresh()=$refreshed; discovering")
-                    g.discoverServices()
+                    discoverServices(g)
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     // Arm the watchdog. autoConnect=true alone is too lazy
@@ -353,21 +331,23 @@ public class PersistentGattClient internal constructor(
                     // forces a fresh `connectGatt` every RECONNECT_INTERVAL_MS
                     // which resets Android's scan timer and gives a
                     // deterministic recovery window once the peer is back
-                    // in range. Cancelled on STATE_CONNECTED above.
-                    if (!stopped.get()) {
-                        Log.i(
-                            PERSISTENT_GATT_LOG_TAG,
-                            "conn state: disconnected; scheduling watchdog in ${RECONNECT_INTERVAL_MS}ms"
-                        )
-                        reconnectHandler.removeCallbacks(reconnectRunnable)
-                        reconnectHandler.postDelayed(reconnectRunnable, RECONNECT_INTERVAL_MS)
-                    }
+                    // in range. Cancelled after notification subscription succeeds.
+                    armReconnectWatchdog()
                 }
             }
         }
 
+        override fun onServiceChanged(g: BluetoothGatt) {
+            if (stopped.get() || gatt.get() !== g) return
+            Log.i(PERSISTENT_GATT_LOG_TAG, "service changed; rediscovering notification characteristic")
+            armReconnectWatchdog()
+            discoverServices(g)
+        }
+
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (stopped.get() || gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
+            if (status != BluetoothGatt.GATT_SUCCESS) return
             val challenge = findCharacteristic(g, SYAUTH_CHALLENGE_CHAR_UUID)
             if (challenge == null) {
                 Log.w(PERSISTENT_GATT_LOG_TAG, "challenge characteristic not present")
@@ -380,6 +360,7 @@ public class PersistentGattClient internal constructor(
             }
             if (!g.setCharacteristicNotification(challenge, true)) {
                 Log.w(PERSISTENT_GATT_LOG_TAG, "setCharacteristicNotification false")
+                return
             }
             cccd.value = CCCD_ENABLE_NOTIFY
             val ok = runCatching { g.writeDescriptor(cccd) }.getOrDefault(false)
@@ -391,6 +372,7 @@ public class PersistentGattClient internal constructor(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
         ) {
+            if (stopped.get() || gatt.get() !== g) return
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             val bytes = characteristic.value ?: return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received len=${bytes.size}")
@@ -402,6 +384,7 @@ public class PersistentGattClient internal constructor(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
+            if (stopped.get() || gatt.get() !== g) return
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received (api33) len=${value.size}")
             onChallenge(peerId, value)
@@ -412,7 +395,14 @@ public class PersistentGattClient internal constructor(
             descriptor: BluetoothGattDescriptor,
             status: Int,
         ) {
+            if (stopped.get() || gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status uuid=${descriptor.uuid}")
+            if (descriptor.uuid == CCCD_UUID && descriptor.characteristic.uuid == SYAUTH_CHALLENGE_CHAR_UUID
+                && status == BluetoothGatt.GATT_SUCCESS
+            ) {
+                reconnectHandler.removeCallbacks(reconnectRunnable)
+                Log.i(PERSISTENT_GATT_LOG_TAG, "challenge notification subscription ready")
+            }
         }
     }
 
@@ -440,7 +430,7 @@ public class PersistentGattClient internal constructor(
 
         /**
          * Watchdog cadence (milliseconds) for re-issuing a fresh
-         * `connectGatt` when the link is in `STATE_DISCONNECTED`.
+         * `connectGatt` while connection or notification setup is incomplete.
          * 15 s is short enough that the user's first sudo after
          * returning into range usually finds the link already
          * recovered, and long enough that we do not thrash the BLE

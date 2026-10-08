@@ -50,6 +50,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowBluetoothGatt
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -62,7 +65,7 @@ private val TEST_SERVICE_UUID: UUID =
     UUID.fromString("5a4e8e3c-1c4c-4a17-9c81-d518a55a0001")
 
 private class RecordingOpener(
-    private val handle: BluetoothGatt,
+    var handle: BluetoothGatt,
 ) : GattOpener {
     var openCalls: Int = 0
         private set
@@ -137,11 +140,153 @@ private fun shadowGattAddService(
     // so subsequent `gatt.services` returns the same list our
     // production code will inspect inside `onServicesDiscovered`.
     gatt.discoverServices()
+    service.characteristics.forEach { shadowOf(gatt).allowCharacteristicNotification(it) }
+}
+
+@Implements(BluetoothGatt::class)
+class SubscriptionGattShadow : ShadowBluetoothGatt() {
+    var discoveryCalls = 0
+    var acceptDescriptorWrite = true
+
+    @Implementation
+    override fun discoverServices(): Boolean {
+        discoveryCalls += 1
+        return super.discoverServices()
+    }
+
+    @Implementation
+    @Suppress("UNUSED_PARAMETER")
+    protected fun writeDescriptor(descriptor: BluetoothGattDescriptor): Boolean = acceptDescriptorWrite
 }
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [26, 34], shadows = [SubscriptionGattShadow::class])
 class PersistentGattClientTest {
+
+    private fun client(opener: RecordingOpener) = PersistentGattClient(
+        context = ctx(),
+        adapter = BluetoothAdapter.getDefaultAdapter(),
+        peerId = TEST_PEER_ID,
+        deviceMac = TEST_DEVICE_MAC,
+        onChallenge = { _, _ -> },
+        gattOpener = opener,
+    )
+
+    private fun advanceWatchdog() {
+        shadowOf(Looper.getMainLooper())
+            .idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+    }
+
+    @Test
+    fun connected_without_completed_subscription_still_retries() {
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val client = client(opener)
+        client.start()
+        opener.lastCallback!!.onConnectionStateChange(handle, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+
+        advanceWatchdog()
+
+        assertEquals("A Bluetooth connection alone cannot receive unlock requests", 2, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    fun failed_subscription_still_retries() {
+        val handle = newShadowGatt()
+        val service = makeServiceWithBothChars()
+        shadowGattAddService(handle, service)
+        val opener = RecordingOpener(handle)
+        val client = client(opener)
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onConnectionStateChange(handle, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        callback.onDescriptorWrite(handle, service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID).getDescriptor(TEST_CCCD_UUID), 133)
+
+        advanceWatchdog()
+
+        assertEquals(2, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    fun successful_subscription_stops_retrying() {
+        val handle = newShadowGatt()
+        val service = makeServiceWithBothChars()
+        shadowGattAddService(handle, service)
+        val opener = RecordingOpener(handle)
+        val client = client(opener)
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onConnectionStateChange(handle, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        callback.onDescriptorWrite(handle, service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID).getDescriptor(TEST_CCCD_UUID), BluetoothGatt.GATT_SUCCESS)
+
+        advanceWatchdog()
+
+        assertEquals(1, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    @Config(sdk = [34])
+    fun service_change_rediscovers_and_rearms_subscription_watchdog() {
+        val handle = newShadowGatt()
+        val service = makeServiceWithBothChars()
+        shadowGattAddService(handle, service)
+        val opener = RecordingOpener(handle)
+        val client = client(opener)
+        client.start()
+        val callback = opener.lastCallback!!
+        callback.onConnectionStateChange(handle, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+        callback.onServicesDiscovered(handle, BluetoothGatt.GATT_SUCCESS)
+        callback.onDescriptorWrite(handle, service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID).getDescriptor(TEST_CCCD_UUID), BluetoothGatt.GATT_SUCCESS)
+        val shadow = shadowOf(handle) as SubscriptionGattShadow
+        val before = shadow.discoveryCalls
+
+        callback.onServiceChanged(handle)
+
+        assertEquals("Changed handles must be rediscovered before subscribing", before + 1, shadow.discoveryCalls)
+        advanceWatchdog()
+        assertEquals("Stalled rediscovery cannot disable recovery", 2, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    fun old_subscription_callback_cannot_stop_recovery_for_new_connection() {
+        val oldHandle = newShadowGatt()
+        val service = makeServiceWithBothChars()
+        shadowGattAddService(oldHandle, service)
+        val opener = RecordingOpener(oldHandle)
+        val client = client(opener)
+        client.start()
+        val callback = opener.lastCallback!!
+        opener.handle = newShadowGatt()
+        client.forceReconnect()
+
+        callback.onDescriptorWrite(
+            oldHandle,
+            service.getCharacteristic(SYAUTH_CHALLENGE_CHAR_UUID).getDescriptor(TEST_CCCD_UUID),
+            BluetoothGatt.GATT_SUCCESS,
+        )
+        advanceWatchdog()
+
+        assertEquals(3, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    fun stop_cancels_subscription_retries() {
+        val opener = RecordingOpener(newShadowGatt())
+        val client = client(opener)
+        client.start()
+        client.stop()
+
+        advanceWatchdog()
+
+        assertEquals(1, opener.openCalls)
+    }
 
     @Test
     fun auto_connect_true_passed_to_connectGatt() {
@@ -233,6 +378,7 @@ class PersistentGattClientTest {
     }
 
     @Test
+    @Config(sdk = [34])
     fun on_characteristic_changed_invokes_onChallenge() {
         val handle = newShadowGatt()
         val opener = RecordingOpener(handle)
