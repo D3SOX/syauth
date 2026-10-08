@@ -145,7 +145,10 @@ line without `on_empty_password` to retain its automatic phone prompt.
 On Plasma/kscreenlocker 6.7.91, the installed KDE worker passed private tests
 for password authentication and password retry after an empty submission. A
 private test through that worker also requested and accepted a fingerprint
-approval from the Pixel 8 Pro. Test the real lock screen before relying on it.
+approval from the Pixel 8 Pro. The real lock-screen tests also passed on
+2026-10-08. The Pixel stayed quiet until empty-field Enter, its fingerprint
+unlocked KDE, typing the laptop password caused no phone prompt, and password
+unlock worked after a phone request timed out.
 
 ## KDE: request the phone automatically
 
