@@ -63,3 +63,53 @@ write may not yield another AcquireNotify callback. Release 3 keeps a valid
 standard notifier across reconnects. One radio cycle recovered in about 3 s
 without GATT rebuilding, followed by a successful real swaylock phone unlock.
 These observations do not qualify all adapters, Doze, or physical range loss.
+
+## Explicit LE transport
+
+The Android pairing exchange and persistent unlock connection explicitly select
+`BluetoothDevice.TRANSPORT_LE`, including when the desktop supports both LE and
+Classic Bluetooth. This does not require enabling an audio profile. The pairing
+exchange still reads the host public key before writing the phone public key:
+the write can cause the desktop to replace its pair service.
+
+The transport selection and its JVM/emulator tests come from
+[D3SOX commit 83e5d69e](https://github.com/D3SOX/syauth/commit/83e5d69ec3db0bfaadc3f379ffc3686a939f282f).
+Upstream notification ownership, numeric comparison, app OOB confirmation, and
+per-unlock biometric signing retain their existing behavior.
+
+## Emulator transport matrix
+
+Use a disposable Android 13+ emulator with Bluetooth netsim support, a full
+JDK 17 or 21 installation, the Android SDK, `adb`, and `uv`. The existing native
+AAR must include the emulator's ABI; `make android-aar` builds it when needed.
+
+```sh
+cd syauth-android
+./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest
+cd ..
+```
+
+Create an owned AVD rather than using a personal phone or an existing user's AVD.
+For example, start the SDK emulator with an available even-numbered port:
+
+```sh
+emulator -avd SYAUTH_TEST_AVD -port 5556 -no-window -no-audio \
+  -gpu swangle -feature -Vulkan -no-snapshot -netsim-args '--pcap'
+adb -s emulator-5556 shell cmd bluetooth_manager enable
+adb -s emulator-5556 install --user 0 -r syauth-android/app/build/outputs/apk/debug/app-debug.apk
+adb -s emulator-5556 install --user 0 -r syauth-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+SYAUTH_BLE_EMULATOR_SERIAL=emulator-5556 cargo test --test bt_matrix -- --ignored --nocapture
+```
+
+The runner requires an emulator serial, verifies its emulator identity and
+Android user 0, then starts the pinned Bumble peer with BLE-only and dual-mode
+configurations. Each case must exchange both fixture keys, receive a notification,
+and write the expected response over LE. It requires `OK (1 test)`, rejects a
+skipped instrumentation test, and checks the peer's independent `PASS` and exit
+status. It stops only the fixture processes it starts. If `uv` selects an
+unsuitable Python environment, set `UV_PYTHON` to an installed Python executable.
+
+These cases exercise GATT transport with synthetic fixture bytes. They do not
+qualify numeric comparison, Keystore signing, biometrics, power consumption, or
+physical-radio recovery. The matrix is explicitly ignored by the ordinary
+workspace suite; the explicit command above runs it without accepting skips.

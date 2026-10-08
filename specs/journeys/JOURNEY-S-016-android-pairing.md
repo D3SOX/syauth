@@ -321,6 +321,45 @@ A first-time pairing takes Alex under 60 seconds end-to-end: tap CTA → pick pe
 **Then** a node containing "LESC handshake failed" is displayed AND `pair.failed.back` is clickable.
 
 ## Traceability
+
+### Explicit LE transport integration
+
+Source: D3SOX commit `83e5d69ec3db0bfaadc3f379ffc3686a939f282f`.
+The pairing exchange must select `BluetoothDevice.TRANSPORT_LE`, including when
+the desktop supports both LE and Classic. Preserve the host-key read before the
+phone-key write and the duplicate-exchange guard. The persistent client already
+selects LE. LESC comparison, app OOB, keys, UUIDs, and the v1 frame/MAC contract
+remain unchanged; synthetic emulator bytes test transport without granting auth.
+
+Acceptance: the JVM transport test rejects the three-argument AUTO call, while
+the real emulator exchanges both fixture keys, receives a notification, and
+writes its response with BLE-only and dual-mode peers. Both runs require an
+executed instrumentation test and the peer's PASS result. The matrix lives in
+`tests/bt_matrix.rs`; `cargo test --test bt_matrix -- --ignored --nocapture` runs
+it against the emulator named by `SYAUTH_BLE_EMULATOR_SERIAL`. The fixture never
+selects a physical device.
+
+Implementation: `RealPairBackend.kt`, `RealPairBackendWiring.kt`, the two
+`BluetoothLeTransportTest.kt` files, `scripts/ble-emulator-peer.py`, and
+`scripts/test-ble-transport.py`.
+
+Validation on 2026-10-20: the original three-argument call fails the imported
+JVM test with `expected:<2> but was:<0>`. Selecting LE passes all 118 JVM tests;
+the app and instrumentation APKs build. An API 34 x86_64 emulator with Emulator
+36.4.10 passes the BLE-only and dual-mode matrix, each with an executed Android
+test, exact fixture bytes, and the peer's independent PASS. A missing-address
+probe returns assumption status -4 despite printing `OK (1 test)`; the gate now
+requires start/status-success codes 1 and 0, with unit coverage for false passes.
+
+Stressors considered: Classic-capable peers, missing fixture address, ignored
+tests, missing APKs, peer timeout, absent notifications, wrong response bytes,
+incorrect Android user, physical-device selection, and pairing-service replacement.
+The runner validates its target, bounds subprocess waits, and reaps owned peers.
+Physical-radio, biometric, and numeric-comparison qualification is not implied
+by these synthetic GATT cases.
+
+### Existing pairing implementation
+
 - Roadmap item: [specs/syauth/ROADMAP.md#step-s-016](../syauth/ROADMAP.md) — S-016.
 - Implementation files:
   - `syauth-android/app/src/main/kotlin/com/sy/syauth/android/pair/PairingState.kt`
