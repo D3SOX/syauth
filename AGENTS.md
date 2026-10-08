@@ -509,6 +509,12 @@ For long implementation sessions, save progress periodically:
 
 ## Resources
 
+Approval cancellation uses the existing v1 frame with ASCII `cancel` payload
+and the current challenge nonce/MAC. Verify the complete frame before payload
+dispatch, match peer and nonce before dismissing, and suppress late biometric
+callbacks. See `docs/cancellation.md` and the cancellation tests in
+`crates/syauth-presenced/tests/challenge_flow.rs` and `BiometricPromptTest.kt`.
+
 - [The Rust Programming Language](https://doc.rust-lang.org/book/)
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
 - [Clippy Lints](https://rust-lang.github.io/rust-clippy/)

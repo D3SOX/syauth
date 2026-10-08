@@ -104,6 +104,14 @@ fn help_snapshot() {
 }
 
 #[test]
+fn pair_help_exposes_real_pairing_options() {
+    let help = help_stdout(&["pair", "--help"]);
+    for option in ["--adapter", "--bond-dir", "--timeout-secs", "--waybar"] {
+        assert!(help.contains(option), "missing pairing option {option}: {help}");
+    }
+}
+
+#[test]
 fn list_help_snapshot() {
     insta::assert_snapshot!("list_help_snapshot", help_stdout(&["list", "--help"]));
 }

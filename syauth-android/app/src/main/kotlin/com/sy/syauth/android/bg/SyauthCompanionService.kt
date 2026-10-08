@@ -34,6 +34,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.sy.syauth.android.bond.BondRecord
 import com.sy.syauth.android.bond.loadPersistedBond
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -42,6 +43,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * because the field-inspection workflow (AGENTS.md /bt skill, Phase 5)
  * greps logcat by tag.
  */
+internal const val CHALLENGE_HEADER_BYTES: Int = 17
+internal const val CHALLENGE_MAC_BYTES: Int = 16
+
 internal const val SYAUTH_BG_LOG_TAG: String = "syauth.bg"
 
 /**
@@ -365,12 +369,7 @@ public class SyauthCompanionService : Service() {
                 peerId = bond.peerId,
                 deviceMac = bond.peerId,
                 onChallenge = { peerId, frameBytes ->
-                    val challengeBody = if (frameBytes.size > 16) {
-                        frameBytes.copyOfRange(0, frameBytes.size - 16)
-                    } else {
-                        frameBytes
-                    }
-                    launchApprovalActivity(appContext, peerId, challengeBody)
+                    handleChallengeFrame(appContext, peerId, frameBytes)
                 },
             )
             PersistentGattClientRegistry.put(bond.peerId, client)
@@ -466,6 +465,24 @@ public class SyauthCompanionService : Service() {
     }
 
     public companion object {
+        internal val cancelledApproval = MutableStateFlow<Pair<String, ByteArray>?>(null)
+
+        /** Verify the complete frame before interpreting its payload or nonce. */
+        internal fun handleChallengeFrame(context: Context, peerId: String, frameBytes: ByteArray) {
+            if (frameBytes.size < CHALLENGE_HEADER_BYTES + CHALLENGE_MAC_BYTES) return
+            val key = bondKeyProvider?.bondKeyFor(peerId) ?: return
+            val payload = challengeVerifier?.verify(key, frameBytes) ?: return
+            when {
+                payload.isEmpty() -> launchApprovalActivity(
+                    context, peerId, frameBytes.copyOfRange(0, frameBytes.size - CHALLENGE_MAC_BYTES),
+                )
+                payload.contentEquals("cancel".toByteArray(Charsets.US_ASCII)) -> {
+                    cancelledApproval.value = peerId to frameBytes.copyOfRange(1, CHALLENGE_HEADER_BYTES)
+                }
+                else -> Log.w(SYAUTH_BG_LOG_TAG, "unknown challenge payload; ignoring peer=$peerId")
+            }
+        }
+
         internal const val LOG_TAG: String = SYAUTH_BG_LOG_TAG
 
         /**
@@ -530,6 +547,7 @@ public class SyauthCompanionService : Service() {
          * state clean between cases.
          */
         public fun resetSeams() {
+            cancelledApproval.value = null
             bondKeyProvider = null
             hostnameResolver = null
             keystoreAliasResolver = null

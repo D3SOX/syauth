@@ -22,7 +22,8 @@ use syauth_cli::{
     install_pam::{self, InstallOpts, InstallOutcome},
     install_presenced::{self, InstallPresencedOpts, InstallPresencedOutcome},
     list::run_list,
-    pair::ListOpts,
+    pair::{ListOpts, PairOpts, run_pair_with_io},
+    pair_backend::{BluerPairBackend, make_auto_accept_confirm_handler, make_stdio_confirm_handler, make_waybar_confirm_handler},
     revoke::{RevokeOpts, run_revoke},
     status::{StatusOpts, run_status},
     uninstall_pam::{self, UninstallOpts, UninstallOutcome},
@@ -42,6 +43,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Cmd {
+    /// Pair a phone over BLE with numeric comparison and app-level OOB confirmation.
+    Pair(PairOpts),
     /// Print the bonds file as TSV: id\tname\tstatus\tcreated_at.
     List(ListOpts),
     /// Mark a bond as revoked (idempotent). The bond record itself is
@@ -96,6 +99,7 @@ fn main() -> ExitCode {
 
 async fn dispatch(cli: Cli) -> Result<()> {
     match cli.cmd {
+        Cmd::Pair(opts) => run_pair_cli(&opts).await,
         Cmd::List(opts) => run_list_cli(&opts),
         Cmd::Revoke(opts) => run_revoke_cli(&opts),
         Cmd::Status(opts) => run_status_cli(&opts).await,
@@ -104,6 +108,27 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::InstallPresenced(opts) => run_install_presenced(&opts),
         Cmd::Doctor(opts) => run_doctor_cli(&opts),
     }
+}
+
+async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
+    let mut seed = [0u8; 32];
+    rand::RngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut seed)?;
+    let host_key = syauth_core::SigningKey::from_bytes(&seed);
+    let backend = BluerPairBackend::new(&opts.adapter, &host_key);
+    let handler = if opts.yes {
+        make_auto_accept_confirm_handler()
+    } else if opts.waybar {
+        make_waybar_confirm_handler()
+    } else {
+        make_stdio_confirm_handler()
+    };
+    backend.install_confirm_handler(handler);
+    // The BlueZ confirmation callback also uses stdio on a blocking worker.
+    // Leave the handles unlocked while awaiting its numeric comparison.
+    let mut reader = io::BufReader::new(io::stdin());
+    let mut writer = io::stdout();
+    run_pair_with_io(opts, &backend, &mut reader, &mut writer).await?;
+    Ok(())
 }
 
 fn run_doctor_cli(opts: &DoctorOpts) -> Result<()> {

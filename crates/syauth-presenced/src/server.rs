@@ -25,8 +25,9 @@ use std::{
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use thiserror::Error;
 use tokio::{
+    io::AsyncReadExt,
     net::{UnixListener, UnixStream},
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -305,8 +306,22 @@ async fn handle_connection(
     }
     let request: Request = read_frame(&mut stream).await?;
     tracing::debug!(?request, "request decoded");
-    let response = dispatch(&request, &reload_tx, orchestrator.as_ref(), test_fixed_nonce, started_at).await;
-    write_frame(&mut stream, &response).await?;
+    let (mut reader, mut writer) = stream.split();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let response = dispatch(&request, &reload_tx, orchestrator.as_ref(), test_fixed_nonce, started_at, cancel_rx);
+    tokio::pin!(response);
+    let mut extra = [0u8; 1];
+    let response = tokio::select! {
+        response = &mut response => Some(response),
+        _ = reader.read(&mut extra) => {
+            let _ = cancel_tx.send(());
+            let _ = response.await;
+            None
+        }
+    };
+    if let Some(response) = response {
+        write_frame(&mut writer, &response).await?;
+    }
     Ok(())
 }
 
@@ -334,14 +349,16 @@ async fn dispatch(
     orchestrator: Option<&Arc<Orchestrator>>,
     test_fixed_nonce: Option<[u8; NONCE_BYTES]>,
     started_at: SystemTime,
+    cancelled: oneshot::Receiver<()>,
 ) -> Response {
     match request {
         Request::Challenge { peer_id, .. } => match orchestrator {
             Some(o) => {
-                let outcome = match test_fixed_nonce {
-                    Some(nonce) => o.issue_challenge_with_nonce(peer_id, nonce, DEFAULT_AUTH_TIMEOUT).await,
-                    None => o.issue_challenge(peer_id, DEFAULT_AUTH_TIMEOUT).await,
-                };
+                let outcome = o
+                    .issue_challenge_until(peer_id, DEFAULT_AUTH_TIMEOUT, test_fixed_nonce, async {
+                        let _ = cancelled.await;
+                    })
+                    .await;
                 let signature = outcome.signature_bytes();
                 let ok = matches!(outcome, crate::orchestrator::ChallengeOutcome::Ok { .. });
                 Response::Challenge {

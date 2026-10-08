@@ -334,3 +334,50 @@ async fn audit_log_appended_with_outcome() {
     }
     drop(guard);
 }
+
+#[tokio::test]
+async fn disconnected_pam_client_cancels_matching_phone_challenge() {
+    use syauth_presenced::{Request, ServeConfig, serve, write_frame};
+    use tokio::net::UnixStream;
+    let tempdir = TempDir::new().expect("tempdir");
+    let fake = FakePeripheral::new();
+    let key = SigningKey::from_bytes(&SIGNING_KEY_SEED);
+    let bond = fixture_bond(&key);
+    let (audit, _) = open_audit_log(&tempdir);
+    let orchestrator = build_orchestrator(fake.clone(), bond.clone(), audit).await;
+    let socket = tempdir.path().join("cancel.sock");
+    let config = ServeConfig {
+        socket_path: socket.clone(),
+        expected_uid: None,
+        reload_tx: None,
+        orchestrator: Some(orchestrator.clone()),
+        test_fixed_nonce: None,
+        started_at: None,
+    };
+    let server = tokio::spawn(serve(config, std::future::pending()));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !socket.exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("server ready");
+    let mut client = UnixStream::connect(&socket).await.expect("connect");
+    write_frame(
+        &mut client,
+        &Request::Challenge {
+            peer_id: bond.peer_id.clone(),
+            nonce: vec![],
+        },
+    )
+    .await
+    .expect("request");
+    let challenge = Frame::decode(&wait_until_notified_after(&fake, &bond.peer_id, 0).await).expect("challenge");
+    drop(client);
+    let cancel = Frame::decode(&wait_until_notified_after(&fake, &bond.peer_id, 1).await).expect("cancel");
+    assert_eq!(cancel.nonce, challenge.nonce);
+    assert_eq!(cancel.payload, b"cancel");
+    assert_eq!(cancel.tag, compute_tag(&BOND_KEY, &cancel.body_bytes().expect("body")));
+    drive_one_ok_challenge(&orchestrator, &fake, &key, &bond).await;
+    server.abort();
+}

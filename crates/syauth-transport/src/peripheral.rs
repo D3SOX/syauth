@@ -69,6 +69,20 @@ use crate::{
 /// generous headroom.
 const RESPONSE_READ_BUF_BYTES: usize = 512;
 
+/// Bluetooth address of the phone allowed to reconnect after a GATT rebuild.
+/// Without this explicit setting, unrelated Bluetooth devices are left alone.
+const RECONNECT_DEVICE_ENV: &str = "SYAUTH_RECONNECT_DEVICE";
+
+fn reconnect_device(value: Option<&str>) -> Result<Option<bluer::Address>, PeripheralError> {
+    value
+        .map(|address| {
+            address.parse().map_err(|err| PeripheralError::Backend {
+                reason: format!("{RECONNECT_DEVICE_ENV}: {err}"),
+            })
+        })
+        .transpose()
+}
+
 /// Stable service UUID per bond, derived from the bond key at minute=0.
 /// The phone's GATT client discovers characteristics by UUID after the
 /// connect — service UUID identity doesn't have to rotate.
@@ -420,50 +434,49 @@ impl PersistentPeripheral {
         Ok((peripheral, pair_event_rx))
     }
 
-    /// Disconnect every LE peer currently connected to our BlueZ
-    /// adapter. Returns `Ok(())` when every disconnect call succeeds;
+    /// Disconnect only the phone explicitly named by `SYAUTH_RECONNECT_DEVICE`.
+    /// An unset address leaves every Bluetooth device connected.
+    /// Returns `Ok(())` when the disconnect call succeeds;
     /// surface-level failures (peer unknown, dbus error) are swallowed
     /// behind a `warn` so a single stuck device cannot block the
     /// caller. Called after every fresh `serve_gatt_application` so a
     /// phone whose CCCD subscription is bound to the previous
     /// Application registration is forced to re-handshake.
     async fn kick_connected_peers(&self) -> Result<(), PeripheralError> {
-        let addrs = self.adapter.device_addresses().await.map_err(|err| PeripheralError::Backend {
-            reason: format!("device_addresses: {err}"),
-        })?;
-        for addr in addrs {
-            let device = match self.adapter.device(addr) {
-                Ok(d) => d,
-                Err(err) => {
-                    tracing::warn!(
-                        target: "syauth_transport",
-                        addr = %addr,
-                        error = %err,
-                        "kick_connected_peers: device handle unavailable"
-                    );
-                    continue;
-                }
-            };
-            let connected = device.is_connected().await.unwrap_or(false);
-            if !connected {
-                continue;
+        let configured = std::env::var(RECONNECT_DEVICE_ENV).ok();
+        let Some(addr) = reconnect_device(configured.as_deref())? else {
+            return Ok(());
+        };
+        let device = match self.adapter.device(addr) {
+            Ok(d) => d,
+            Err(err) => {
+                tracing::warn!(
+                    target: "syauth_transport",
+                    addr = %addr,
+                    error = %err,
+                    "kick_connected_peers: device handle unavailable"
+                );
+                return Ok(());
             }
-            match device.disconnect().await {
-                Ok(()) => {
-                    tracing::info!(
-                        target: "syauth_transport",
-                        addr = %addr,
-                        "kick_connected_peers: disconnected stale peer"
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        target: "syauth_transport",
-                        addr = %addr,
-                        error = %err,
-                        "kick_connected_peers: Device::disconnect failed"
-                    );
-                }
+        };
+        if !device.is_connected().await.unwrap_or(false) {
+            return Ok(());
+        }
+        match device.disconnect().await {
+            Ok(()) => {
+                tracing::info!(
+                    target: "syauth_transport",
+                    addr = %addr,
+                    "kick_connected_peers: disconnected stale peer"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "syauth_transport",
+                    addr = %addr,
+                    error = %err,
+                    "kick_connected_peers: Device::disconnect failed"
+                );
             }
         }
         Ok(())
@@ -1258,6 +1271,17 @@ const FAKE_RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reconnect_requires_an_explicit_phone_address() {
+        assert_eq!(super::reconnect_device(None).expect("unset address"), None);
+        let phone = "AA:BB:CC:DD:EE:FF".parse().expect("phone address");
+        assert_eq!(
+            super::reconnect_device(Some("AA:BB:CC:DD:EE:FF")).expect("configured phone"),
+            Some(phone)
+        );
+        assert!(super::reconnect_device(Some("all")).is_err());
+    }
+
     // Journey: specs/journeys/JOURNEY-S-003-peripheral-library-api.md
     use super::*;
 

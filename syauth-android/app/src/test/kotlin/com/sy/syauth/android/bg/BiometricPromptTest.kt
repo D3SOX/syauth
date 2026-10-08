@@ -53,6 +53,8 @@ private class RecordingResponseSink : ResponseSink {
 }
 
 private class RecordingBiometricGate : BiometricGate {
+    var cancelCount = 0
+    override fun cancel() { cancelCount += 1 }
     var lastChallenge: ByteArray = ByteArray(0)
         private set
     var lastCallback: BiometricGateCallback? = null
@@ -98,6 +100,7 @@ class BiometricPromptTest {
     @After
     fun cleanup() {
         ChallengeApprovalActivity.resetSeams()
+        SyauthCompanionService.resetSeams()
     }
 
     @Test
@@ -186,4 +189,60 @@ class BiometricPromptTest {
         )
         assertTrue("activity is finishing after biometric fail", activity.isFinishing)
     }
+    @Test
+    fun host_cancel_dismisses_biometric_and_ignores_late_success() {
+        val gate = RecordingBiometricGate()
+        val sink = RecordingResponseSink()
+        ChallengeApprovalActivity.biometricGate = gate
+        ChallengeApprovalActivity.responseSink = sink
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+        val activity = controller.get()
+        activity.onApproveClicked()
+        val nonce = ByteArray(FIXTURE_CHALLENGE_LEN) { it.toByte() }.copyOfRange(1, 17)
+        SyauthCompanionService.cancelledApproval.value = FIXTURE_PEER_ID to nonce
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(activity.isFinishing)
+        assertEquals(1, gate.cancelCount)
+        gate.succeed(ByteArray(64))
+        assertTrue(sink.calls.isEmpty())
+        controller.pause().stop().destroy()
+    }
+
+    @Test
+    fun mismatched_or_unverified_host_cancel_does_not_dismiss() {
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+        val activity = controller.get()
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        SyauthCompanionService.bondKeyProvider = BondKeyProvider { ByteArray(32) }
+        SyauthCompanionService.challengeVerifier = ChallengeVerifier { _, _ -> null }
+        val forged = ByteArray(39)
+        ByteArray(FIXTURE_CHALLENGE_LEN) { it.toByte() }.copyInto(forged, endIndex = 17)
+        "cancel".toByteArray().copyInto(forged, destinationOffset = 17)
+        SyauthCompanionService.handleChallengeFrame(context, FIXTURE_PEER_ID, forged)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(SyauthCompanionService.cancelledApproval.value == null)
+        assertTrue(!activity.isFinishing)
+        SyauthCompanionService.cancelledApproval.value = FIXTURE_PEER_ID to ByteArray(16)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(!activity.isFinishing)
+        controller.pause().stop().destroy()
+    }
+
+    @Test
+    fun verified_cancel_received_before_activity_launch_dismisses_matching_nonce() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val frame = ByteArray(39)
+        ByteArray(FIXTURE_CHALLENGE_LEN) { it.toByte() }.copyInto(frame, endIndex = 17)
+        SyauthCompanionService.bondKeyProvider = BondKeyProvider { ByteArray(32) }
+        SyauthCompanionService.challengeVerifier = ChallengeVerifier { _, _ -> "cancel".toByteArray() }
+        SyauthCompanionService.handleChallengeFrame(context, FIXTURE_PEER_ID, frame)
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(controller.get().isFinishing)
+        controller.pause().stop().destroy()
+    }
+
 }

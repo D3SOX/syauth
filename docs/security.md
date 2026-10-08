@@ -100,6 +100,15 @@ ID from the threat document.
 
 ## Where to look in the source
 
+Pending approvals are dismissed when their PAM caller disconnects or the
+daemon's deadline expires. Cancellation uses a bond-key-authenticated frame
+and matches the current peer and nonce; it cannot grant authentication. Android
+also ignores late biometric callbacks after cancellation. Delivery is best
+effort, so lost BLE notifications can leave a stale UI visible, while the
+authentication request is already terminated. See
+[approval cancellation](cancellation.md) and its
+[threat model](../specs/threat/THREAT-2026-10-08-cancellation.md).
+
 The full per-threat audit (file paths, line ranges, test names) is in
 [`specs/threat/THREAT-2026-05-15.md`](../specs/threat/THREAT-2026-05-15.md).
 The high-traffic modules are `crates/syauth-core` (wire format,

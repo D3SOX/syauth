@@ -109,6 +109,7 @@ import com.sy.syauth.android.bond.BOND_RECORD_FILE_NAME
 import com.sy.syauth.android.bond.BondStore
 import com.sy.syauth.android.bond.DiskBondPersister
 import com.sy.syauth.android.bond.loadPersistedBond
+import com.sy.syauth.android.pair.PairingState
 import com.sy.syauth.android.pair.PairingScreen
 import com.sy.syauth.android.pair.PairingViewModel
 import com.sy.syauth.android.pair.impl.AndroidCdmPairCompanionScanner
@@ -270,9 +271,7 @@ class MainActivity : FragmentActivity() {
      * the Keystore alias for the Ed25519 signing key — the private
      * bytes never appear on disk or in memory.
      *
-     * Held in a `mutableStateOf` so Compose re-renders if a future
-     * code path mutates the bond mid-session (none does today; the
-     * field is read-once).
+     * Observed by Compose; refreshed after successful pairing and revoke.
      */
     internal val bondRecord = mutableStateOf<BondRecord?>(null)
 
@@ -286,13 +285,8 @@ class MainActivity : FragmentActivity() {
      * the legacy advertise permission — the phone never advertises
      * again.
      *
-     * `SyauthCompanionService` is bound by the OS when the
-     * CompanionDeviceManager observes the associated desktop in
-     * range; we do NOT call `startForegroundService` ourselves. The
-     * grant is pre-warmed here so the first observation lands
-     * without a runtime dialog. If the user denies, the next
-     * observation falls back to the OS dialog the OS surfaces from
-     * within the CompanionDeviceService binding.
+     * Pre-warm the permission before pairing or starting the bonded
+     * companion service. CDM also binds it when the desktop appears.
      */
     private val bluetoothPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -470,20 +464,7 @@ class MainActivity : FragmentActivity() {
                 peerId = bond.peerId,
                 deviceMac = bond.peerId,
                 onChallenge = { peerId, frameBytes ->
-                    // Strip the trailing 16-byte MAC tag so the
-                    // signature is computed over the frame body only
-                    // (version || nonce || payload), matching the
-                    // daemon's verify_frame(body_bytes) contract.
-                    val challengeBody = if (frameBytes.size > 16) {
-                        frameBytes.copyOfRange(0, frameBytes.size - 16)
-                    } else {
-                        frameBytes
-                    }
-                    SyauthCompanionService.launchApprovalActivity(
-                        applicationContext,
-                        peerId,
-                        challengeBody,
-                    )
+                    SyauthCompanionService.handleChallengeFrame(applicationContext, peerId, frameBytes)
                 },
             )
             PersistentGattClientRegistry.put(bond.peerId, client)
@@ -494,8 +475,8 @@ class MainActivity : FragmentActivity() {
 
     /**
      * Issue an explicit `startForegroundService` to the foreground
-     * `SyauthCompanionService`. Only reached from the `record != null`
-     * branch in `onCreate`, so the no-bond path stays idle (the
+     * `SyauthCompanionService`. Only reached with a persisted bond,
+     * on startup or pairing completion, so the no-bond path stays idle (the
      * service would crash with the 5-second `startForeground`
      * timeout otherwise).
      */
@@ -551,20 +532,8 @@ class MainActivity : FragmentActivity() {
         if (record == null) {
             Toast.makeText(this, NO_BOND_TOAST, Toast.LENGTH_LONG).show()
         } else {
-            installCompanionSeams(record)
-            installPersistentClientFactory(record)
-            startObservingForBondedAssociations(record)
-            startSyauthCompanionForegroundService()
-            scheduleSyauthWatchdog()
+            activateBond(record)
         }
-        // DEV-003: with the desktop now advertising, the phone-side
-        // foreground service is gated entirely by the
-        // CompanionDeviceManager association created during the LESC
-        // pair flow. The OS binds `SyauthCompanionService` when the
-        // associated peer comes into range; we never start it
-        // ourselves. If no CDM association exists (user has not yet
-        // paired), the path stays idle — the toast above prompts the
-        // user to pair first.
         setContent {
             SyauthTheme {
                 Surface(
@@ -577,10 +546,27 @@ class MainActivity : FragmentActivity() {
                         bondRecord = bondRecord.value,
                         cdmPairScanner = cdmPairScanner,
                         onRevoke = ::onBondRevokeTapped,
+                        onPairingFinished = ::onPairingFinished,
                     )
                 }
             }
         }
+    }
+
+    /** Activate the saved bond immediately when the successful pair flow finishes. */
+    internal fun onPairingFinished(state: PairingState) {
+        if (state !is PairingState.Bonded) return
+        val record = runCatching { loadPersistedBond(filesDir) }.getOrNull() ?: return
+        bondRecord.value = record
+        activateBond(record)
+    }
+
+    private fun activateBond(record: BondRecord) {
+        installCompanionSeams(record)
+        installPersistentClientFactory(record)
+        startObservingForBondedAssociations(record)
+        startSyauthCompanionForegroundService()
+        scheduleSyauthWatchdog()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -634,6 +620,7 @@ private fun SyauthApp(
     bondRecord: BondRecord?,
     cdmPairScanner: AndroidCdmPairCompanionScanner?,
     onRevoke: () -> Unit,
+    onPairingFinished: (PairingState) -> Unit,
 ) {
     val navController = rememberNavController()
     val homeContext = activity.applicationContext
@@ -683,6 +670,7 @@ private fun SyauthApp(
                 onOobYes = viewModel::onOobYesTapped,
                 onOobNo = viewModel::onOobNoTapped,
                 onDone = {
+                    onPairingFinished(state)
                     navController.popBackStack(NavRoutes.HOME, inclusive = false)
                 },
             )

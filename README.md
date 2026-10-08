@@ -1,9 +1,8 @@
 # syauth
 
 > **Phone-as-key Linux unlock.** Sign your `sudo`, `login`, `gdm`, and
-> `swaylock` with a biometric tap on the Android phone in your pocket
-> — no password typing, no shared secrets on disk, no relay-attack
-> footgun. When the phone is out of range, syauth steps aside and
+> `swaylock` or KDE screen unlock with a biometric tap on the Android phone in your pocket
+> — no cloud service required. When the phone is out of range, syauth steps aside and
 > FIDO2 or your password handles the auth.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -36,8 +35,8 @@ doesn't carry together:
    theirs.
 3. **Graceful fallback.** PAM stack control flag is `sufficient`,
    not `required`. Phone absent → next module runs. The default
-   install wires FIDO2 as the fallback so the chain reads
-   `syauth → FIDO → password`.
+   installer can add FIDO2; the Arch/KDE guide preserves your existing
+   password and fingerprint authentication.
 
 ---
 
@@ -76,103 +75,35 @@ doesn't carry together:
 
 ## Quick start
 
-### 1. Build & install the desktop side
+For the tested Arch Linux / KDE Plasma / Pixel setup, follow:
 
-```sh
-git clone https://github.com/dmytrogajewski/syauth.git
-cd syauth
-cargo build --release \
-  -p syauth-cli -p syauth-pam -p syauth-presenced
+1. [Build, install, and pair](docs/getting-started.md), including the native
+   Android AAR, systemd runtime permissions, and phone-only Bluetooth recovery.
+2. [Enable sudo and KDE screen unlock](docs/pam.md), including backups, tests,
+   password fallback, and rollback.
 
-sudo install -m 644 target/release/libpam_syauth.so \
-  /usr/lib64/security/pam_syauth.so
-sudo install -m 755 target/release/syauth          /usr/local/bin/syauth
-sudo install -m 755 target/release/syauth-presenced \
-  /usr/local/libexec/syauth-presenced
+Pair with `syauth pair --timeout-secs 300` while the presence daemon is stopped.
+Compare both the six-digit system Bluetooth code and the four-word app phrase.
+Tapping Done on the phone updates Home and starts its connection service without
+restarting the app. Then enable the desktop daemon.
 
-syauth install-presenced --live
-```
+For KDE, use the parallel `kde-fingerprint` PAM service and preserve the normal
+`kde` password service. Password unlock automatically dismisses the pending
+phone approval. See [approval cancellation](docs/cancellation.md).
 
-### 2. Install the Android app
+The generic `install-pam` / `uninstall-pam` commands remain available for other
+PAM services. Review their output and the target distro's module paths before
+applying it; the per-user socket and KDE parallel stack need the explicit setup
+above. The tested Arch module path is `/usr/lib/security/pam_syauth.so`.
 
-```sh
-cd syauth-android
-./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+## Bluetooth recovery
 
-(Or grab a signed APK from the
-[Releases](https://github.com/dmytrogajewski/syauth/releases) page.)
-
-### 3. Pair
-
-```sh
-syauth pair --waybar      # desktop side; surfaces the 6-digit code in the bar
-```
-
-On the phone: tap **Pair**, pick the desktop from the OS picker,
-confirm the 6-digit LESC code, then confirm the four-word OOB
-phrase. Bond is persisted; from now on the desktop's daemon and the
-phone's foreground service hold a long-lived link.
-
-### 4. Wire it into your PAM stacks
-
-```sh
-sudo syauth install-pam --service sudo
-sudo syauth install-pam --service gdm-password
-sudo syauth install-pam --service swaylock
-sudo syauth install-pam --service login --with-u2f-fallback
-sudo syauth install-pam --service su    --with-u2f-fallback
-```
-
-Defaults: `--control sufficient` and `--module-args timeout=8000`.
-The tool writes a `.bak` snapshot per service, so undoing is
-`syauth uninstall-pam --service <name>`.
-
-### 5. Verify
-
-```sh
-sudo true                 # phone vibrates → tap biometric → root shell
-sudo journalctl --since "30 seconds ago" | grep grantors=pam_syauth
-```
-
-If you see `grantors=pam_syauth`, you're done.
-
----
-
-## Resulting auth chains
-
-| Service        | Chain                                                |
-|----------------|------------------------------------------------------|
-| `sudo`         | syauth (8 s) → `pam_u2f` cue → `system-auth`         |
-| `gdm-password` | syauth (8 s) → selinux\_permit → `pam_u2f` cue → password-auth |
-| `swaylock`     | syauth (8 s) → `pam_u2f` cue → include `login`       |
-| `login`        | syauth (8 s) → `pam_u2f` cue → `system-auth`         |
-| `su`           | syauth (8 s) → `pam_u2f` cue → `pam_rootok` → `system-auth` |
-| `sshd`         | _intentionally not installed_ (no phone presence over SSH) |
-
-Every line above is what `head -6 /etc/pam.d/<service>` actually
-prints on a freshly-provisioned host.
-
----
-
-## Resilience
-
-A daemon restart used to leave the phone's CCCD subscription bound
-to a dead GATT application registration, killing every subsequent
-challenge. Two changes make recovery automatic:
-
-- **Desktop** (`crates/syauth-transport/src/peripheral.rs`): after
-  registering a fresh GATT app, the daemon iterates
-  `adapter.device_addresses()` and calls `Device::disconnect()` on
-  any connected peer. The phone's link drops cleanly.
-- **Phone** (`syauth-android/.../bg/PersistentGattClient.kt`): on
-  every `STATE_CONNECTED`, the client calls `BluetoothGatt.refresh()`
-  (reflective; clears the on-disk service cache) before
-  `discoverServices()`.
-
-End-to-end recovery: ~8 seconds, no human intervention. The next
-`sudo` succeeds via syauth, not FIDO fallback.
+On restart the daemon can disconnect and reconnect one explicitly configured
+phone to recover a stale GATT subscription. Set `SYAUTH_RECONNECT_DEVICE` to that
+phone's bonded BlueZ identity address; when unset it disconnects no devices.
+Headphones and other Bluetooth devices remain connected. The phone refreshes its
+GATT cache on connection before discovering services. See
+[Bluetooth configuration](docs/bluetooth.md).
 
 ---
 

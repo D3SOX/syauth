@@ -93,6 +93,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.sy.syauth.android.R
 import com.sy.syauth.android.ui.theme.SyauthTheme
 import android.security.keystore.KeyPermanentlyInvalidatedException
@@ -240,6 +242,9 @@ public interface BiometricGateCallback {
  * lifecycle on a Robolectric JVM.
  */
 public interface BiometricGate {
+    /** Dismiss the active biometric operation without signing. */
+    public fun cancel()
+
     /**
      * Open a fresh BiometricPrompt round bound to a per-use
      * Keystore signing operation. MUST invoke exactly one callback
@@ -310,6 +315,8 @@ public class ChallengeApprovalActivity : FragmentActivity() {
     internal var lastPromptText: String = ""
         private set
 
+    private var activeGate: BiometricGate? = null
+    private var terminal: Boolean = false
     private var resolvedPeerId: String = ""
     private var resolvedHostname: String = ""
     private var resolvedChallenge: ByteArray = ByteArray(0)
@@ -334,6 +341,17 @@ public class ChallengeApprovalActivity : FragmentActivity() {
         resolvedHostname = hostname
         resolvedChallenge = intent?.getByteArrayExtra(EXTRA_CHALLENGE_BYTES) ?: ByteArray(0)
         resolvedKeystoreAlias = intent?.getStringExtra(EXTRA_KEYSTORE_ALIAS).orEmpty()
+        lifecycleScope.launch {
+            SyauthCompanionService.cancelledApproval.collect { cancelled ->
+                if (cancelled != null && cancelled.first == resolvedPeerId &&
+                    resolvedChallenge.size >= CHALLENGE_HEADER_BYTES &&
+                    cancelled.second.contentEquals(resolvedChallenge.copyOfRange(1, CHALLENGE_HEADER_BYTES))) {
+                    terminal = true
+                    activeGate?.cancel()
+                    finish()
+                }
+            }
+        }
         val short = shortPeerId(peerId)
         val promptText = "$hostname is requesting sudo (peer_id $short)"
         lastPromptText = promptText
@@ -343,6 +361,9 @@ public class ChallengeApprovalActivity : FragmentActivity() {
 
     /** Test seam: invoked by the Compose Cancel button. */
     internal fun onCancelClicked() {
+        if (terminal) return
+        terminal = true
+        activeGate?.cancel()
         Log.i(APPROVAL_LOG_TAG, "cancel peer=$resolvedPeerId reason=$DENIED_FRAME_REASON")
         cancelSink?.onCancel(resolvedPeerId, DENIED_FRAME_BYTES)
         finish()
@@ -355,6 +376,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
      * (per-use Keystore key contract per SPEC §3.2 D6).
      */
     internal fun onApproveClicked() {
+        if (terminal) return
         Log.i(APPROVAL_LOG_TAG, "approve peer=$resolvedPeerId alias=$resolvedKeystoreAlias")
         // Test override on the companion seam takes precedence over
         // the per-instance production gate so a Robolectric JVM test
@@ -364,6 +386,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
             peerId = resolvedPeerId,
             hostname = resolvedHostname,
         )
+        activeGate = gate
         gate.authenticate(
             resolvedKeystoreAlias,
             resolvedChallenge,
@@ -382,6 +405,8 @@ public class ChallengeApprovalActivity : FragmentActivity() {
     }
 
     private fun writeResponseAndFinish(responseBytes: ByteArray) {
+        if (terminal) return
+        terminal = true
         responseSink?.onResponse(resolvedPeerId, responseBytes)
         if (!isFinishing) {
             finish()
@@ -498,6 +523,11 @@ internal class AndroidBiometricGate(
     private val peerId: String,
     private val hostname: String,
 ) : BiometricGate {
+    private var prompt: BiometricPrompt? = null
+
+    override fun cancel() {
+        prompt?.cancelAuthentication()
+    }
 
     override fun authenticate(
         keystoreAlias: String,
@@ -567,6 +597,7 @@ internal class AndroidBiometricGate(
             }
         }
         val prompt = BiometricPrompt(activity, executor, authCallback)
+        this.prompt = prompt
         val promptInfo = buildPromptInfo(activity, hostname, shortPeerIdInternal(peerId))
         prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))
     }

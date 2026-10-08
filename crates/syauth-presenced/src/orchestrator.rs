@@ -23,6 +23,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    future::Future,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration as StdDuration, SystemTime, UNIX_EPOCH},
@@ -241,6 +242,8 @@ pub enum ChallengeOutcome {
     /// `Peripheral::wait_for_response` reached its deadline without
     /// observing a write on the per-peer response characteristic.
     TimedOut,
+    /// The PAM caller closed its connection before receiving a result.
+    Cancelled,
     /// `peer_id` was not registered with the orchestrator
     /// (`add_peer` was never called for it).
     UnknownPeer,
@@ -263,6 +266,7 @@ impl ChallengeOutcome {
             ChallengeOutcome::Replay => OUTCOME_REASON_REPLAY,
             ChallengeOutcome::BadSignature => OUTCOME_REASON_BAD_SIGNATURE,
             ChallengeOutcome::TimedOut => OUTCOME_REASON_RESPONSE_TIMEOUT,
+            ChallengeOutcome::Cancelled => "cancelled",
             ChallengeOutcome::UnknownPeer => OUTCOME_REASON_UNKNOWN_PEER,
             ChallengeOutcome::Busy => OUTCOME_REASON_BUSY,
             ChallengeOutcome::TransportError(_) => OUTCOME_REASON_TRANSPORT_ERROR,
@@ -796,6 +800,18 @@ impl Orchestrator {
     /// last 32 records on power loss; losing one record because the
     /// disk is full is a strictly weaker failure).
     pub async fn issue_challenge(&self, peer_id: &str, deadline: StdDuration) -> ChallengeOutcome {
+        self.issue_challenge_until(peer_id, deadline, None, std::future::pending()).await
+    }
+
+    /// Issue a challenge until the caller disconnects or the deadline expires.
+    /// Cancellation dismisses only this nonce and never grants authentication.
+    pub async fn issue_challenge_until(
+        &self,
+        peer_id: &str,
+        deadline: StdDuration,
+        fixed_nonce: Option<[u8; NONCE_BYTES]>,
+        cancelled: impl Future<Output = ()>,
+    ) -> ChallengeOutcome {
         let t_start_ms = epoch_millis(SystemTime::now());
         let peer_state = match self.lookup_peer(peer_id).await {
             Some(s) => s,
@@ -818,8 +834,8 @@ impl Orchestrator {
 
         stamp_liveness(&peer_state.liveness, SystemTime::now()).await;
 
-        let mut nonce = [0u8; NONCE_BYTES];
-        if let Err(err) = getrandom::fill(&mut nonce) {
+        let mut nonce = fixed_nonce.unwrap_or([0u8; NONCE_BYTES]);
+        if let Err(err) = fixed_nonce.map_or_else(|| getrandom::fill(&mut nonce), |_| Ok(())) {
             let t_end_ms = epoch_millis(SystemTime::now());
             self.audit_at(peer_id, ZERO_NONCE_HEX, t_start_ms, t_end_ms, OUTCOME_REASON_TRANSPORT_ERROR)
                 .await;
@@ -828,7 +844,9 @@ impl Orchestrator {
                 reason: format!("nonce rng: {err}"),
             });
         }
-        let outcome = self.run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms).await;
+        let outcome = self
+            .run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms, cancelled)
+            .await;
         drop(permit);
         outcome
     }
@@ -839,28 +857,8 @@ impl Orchestrator {
     /// [`Self::issue_challenge`].
     #[doc(hidden)]
     pub async fn issue_challenge_with_nonce(&self, peer_id: &str, nonce: [u8; NONCE_BYTES], deadline: StdDuration) -> ChallengeOutcome {
-        let t_start_ms = epoch_millis(SystemTime::now());
-        let peer_state = match self.lookup_peer(peer_id).await {
-            Some(s) => s,
-            None => {
-                self.audit_outcome(peer_id, ZERO_NONCE_HEX, t_start_ms, OUTCOME_REASON_UNKNOWN_PEER)
-                    .await;
-                return ChallengeOutcome::UnknownPeer;
-            }
-        };
-        let permit = match self.acquire_challenge_slot(&peer_state.challenge_slot).await {
-            Some(p) => p,
-            None => {
-                let t_end_ms = epoch_millis(SystemTime::now());
-                self.audit_at(peer_id, ZERO_NONCE_HEX, t_start_ms, t_end_ms, OUTCOME_REASON_BUSY)
-                    .await;
-                return ChallengeOutcome::Busy;
-            }
-        };
-        stamp_liveness(&peer_state.liveness, SystemTime::now()).await;
-        let outcome = self.run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms).await;
-        drop(permit);
-        outcome
+        self.issue_challenge_until(peer_id, deadline, Some(nonce), std::future::pending())
+            .await
     }
 
     /// Acquire the per-peer single-permit semaphore with a
@@ -890,6 +888,7 @@ impl Orchestrator {
         deadline: StdDuration,
         peer_state: &PeerState,
         t_start_ms: u128,
+        cancelled: impl Future<Output = ()>,
     ) -> ChallengeOutcome {
         let nonce_hex = hex::encode(nonce);
         let mut challenge = Frame {
@@ -928,9 +927,20 @@ impl Orchestrator {
             self.audit_at(peer_id, &nonce_hex, t_start_ms, t_end_ms, reason).await;
             return challenge_outcome_for_transport(&err);
         }
-        let response_bytes = match self.peripheral.wait_for_response(peer_id, deadline).await {
+        let response = tokio::select! {
+            biased;
+            () = cancelled => {
+                self.notify_cancellation(peer_id, nonce, peer_state).await;
+                let t_end_ms = epoch_millis(SystemTime::now());
+                self.audit_at(peer_id, &nonce_hex, t_start_ms, t_end_ms, "cancelled").await;
+                return ChallengeOutcome::Cancelled;
+            }
+            response = self.peripheral.wait_for_response(peer_id, deadline) => response,
+        };
+        let response_bytes = match response {
             Ok(b) => b,
             Err(PeripheralError::ResponseTimeout { .. }) => {
+                self.notify_cancellation(peer_id, nonce, peer_state).await;
                 let t_end_ms = epoch_millis(SystemTime::now());
                 self.audit_at(peer_id, &nonce_hex, t_start_ms, t_end_ms, OUTCOME_REASON_RESPONSE_TIMEOUT)
                     .await;
@@ -982,6 +992,24 @@ impl Orchestrator {
         let t_end_ms = epoch_millis(SystemTime::now());
         self.audit_at(peer_id, &nonce_hex, t_start_ms, t_end_ms, OUTCOME_REASON_OK).await;
         ChallengeOutcome::Ok { signature }
+    }
+
+    async fn notify_cancellation(&self, peer_id: &str, nonce: [u8; NONCE_BYTES], peer_state: &PeerState) {
+        let mut frame = Frame {
+            version: SYAUTH_WIRE_VERSION_V1,
+            nonce,
+            payload: b"cancel".to_vec(),
+            tag: [0u8; TAG_LEN],
+        };
+        if let Ok(body) = frame.body_bytes() {
+            frame.tag = syauth_core::compute_tag(&peer_state.bond_key, &body);
+            let mut encoded = Vec::new();
+            if frame.encode(&mut encoded).is_ok() {
+                if let Err(error) = self.peripheral.notify_challenge(peer_id, &encoded).await {
+                    tracing::warn!(peer_id, %error, "could not dismiss cancelled phone approval");
+                }
+            }
+        }
     }
 
     /// Look up the cached per-peer state needed by `issue_challenge`.
