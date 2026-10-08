@@ -83,15 +83,6 @@ internal const val PAIR_UUID_BYTE_LEN: Int = 16
 /** Bond key length (32 bytes) returned by the post-bond pubkey-exchange step. */
 public const val PAIR_BOND_KEY_LEN: Int = 32
 
-/**
- * Value of `BluetoothDevice.TRANSPORT_LE` per the AOSP source. The
- * symbol is `@hide` for third-party apps but the int value (2) is
- * documented and stable across API levels; we pin it here so the
- * createBond reflection call doesn't need to drag in the SDK
- * constant via another `@hide` API.
- */
-internal const val BLUETOOTH_TRANSPORT_LE: Int = 2
-
 /** Placeholder surfaced as the LESC "6-digit code" until the broadcast lands. */
 public const val LESC_PENDING_PLACEHOLDER: String = "(awaiting OS pairing request)"
 
@@ -470,11 +461,8 @@ public class RealPairBackend(
         // agent only handles LESC numeric comparison over LE; the
         // BR/EDR SSP request has no handler on the desktop and the
         // bond times out with HCI_ERR_AUTH_FAILURE.
-        // `createBond(int)` is `@hide` for third-party apps but
-        // stable across API levels (the int argument has been on
-        // `BluetoothDevice` since API 23); reach it via reflection.
-        // `BluetoothDevice.TRANSPORT_LE` is the documented constant
-        // value `2`.
+        // Our compile SDK does not expose `createBond(int)`, so
+        // use reflection to select LE. The transport constant is public.
         val bondState = runCatching { device.bondState }.getOrElse { -1 }
         Log.i(
             REAL_PAIR_BACKEND_LOG_TAG,
@@ -492,7 +480,7 @@ public class RealPairBackend(
         }
         val startedResult: Result<Boolean> = runCatching {
             val method = device.javaClass.getMethod("createBond", Int::class.javaPrimitiveType)
-            method.invoke(device, BLUETOOTH_TRANSPORT_LE) as? Boolean ?: false
+            method.invoke(device, BluetoothDevice.TRANSPORT_LE) as? Boolean ?: false
         }
         val started = startedResult.getOrElse { err ->
             Log.w(REAL_PAIR_BACKEND_LOG_TAG, "createBond(TRANSPORT_LE) threw", err)

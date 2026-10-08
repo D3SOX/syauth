@@ -8,6 +8,7 @@
 package com.sy.syauth.android.pair.impl
 
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -204,7 +205,7 @@ public class AndroidPairGattExchange(
             }
         }
 
-        val gatt = device.connectGatt(context, false, callback)
+        val gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
         try {
             if (!servicesDiscovered.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) {
                 throw RuntimeException("service-discovery timeout")

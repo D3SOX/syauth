@@ -122,7 +122,9 @@ syauth pair --timeout-secs 300
    in Android's device picker (it may use this advertisement name rather than
    your laptop hostname).
 2. Compare the six-digit Bluetooth code on both devices and approve only a match.
-   Contact/call-history sharing is unnecessary.
+   Contact/call-history sharing is unnecessary. Media audio and Phone calls can
+   stay disabled; authentication uses BLE. See the
+   [Bluetooth transport test](bluetooth.md#test-the-pixel-without-audio-profiles).
 3. Compare the four-word app confirmation on both devices and confirm the match
    in the phone app and desktop terminal. These are a separate confirmation from
    the system Bluetooth dialog.
