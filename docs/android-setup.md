@@ -33,6 +33,11 @@ operation requires fresh strong biometric authentication. Each incoming request
 opens the fingerprint prompt automatically, without an extra Approve button tap.
 Dismissing that prompt returns to the Authorize/Disallow screen while the request
 is pending. Authorize reopens biometrics; Disallow rejects the request.
+The pending approval appears in Android Recents. Its card is removed when the
+request is approved, disallowed, cancelled by the desktop, or closed after an
+error. Dismissing only biometrics keeps the pending approval available for retry,
+including after switching to another app. The desktop deadline still applies;
+its cancellation closes the pending approval even while it is in the background.
 The phone prompt has no PIN/password fallback; the laptop's normal PAM password
 is independent.
 

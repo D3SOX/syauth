@@ -5,7 +5,7 @@
 // `SyauthCompanionService` launches this activity via
 // `PendingIntent.getActivity` on every fresh challenge frame the
 // `PersistentGattClient.onChallenge` callback delivers. The activity
-// is `noHistory="true"`, `launchMode="singleInstance"`, and
+// uses `launchMode="singleInstance"` and `autoRemoveFromRecents="true"`, and
 // declares `android:showWhenLocked="true"` / `android:turnScreenOn="true"`
 // in `AndroidManifest.xml`; the OS therefore wakes the screen and
 // renders the activity over the keyguard.

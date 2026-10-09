@@ -20,6 +20,7 @@
 package com.sy.syauth.android.bg
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Before
@@ -81,6 +82,10 @@ class ChallengeApprovalActivityTest {
 
         assertTrue("setShowWhenLocked(true) called", activity.lastShowWhenLockedFlag)
         assertTrue("setTurnScreenOn(true) called", activity.lastTurnScreenOnFlag)
+        val info = activity.packageManager.getActivityInfo(activity.componentName, 0)
+        assertTrue("completed prompts are removed from Recents", info.flags and ActivityInfo.FLAG_AUTO_REMOVE_FROM_RECENTS != 0)
+        assertTrue("pending prompts remain visible in Recents", info.flags and ActivityInfo.FLAG_EXCLUDE_FROM_RECENTS == 0)
+        assertTrue("switching apps preserves pending prompts", info.flags and ActivityInfo.FLAG_NO_HISTORY == 0)
     }
 
     @Test
