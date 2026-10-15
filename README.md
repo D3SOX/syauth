@@ -74,7 +74,7 @@ python3 scripts/install.py --dry-run
 python3 scripts/install.py
 ```
 
-The installer builds the desktop binaries, uses `pkexec` for system files, and
+The installer builds the desktop binaries, uses `sudo` for system files, and
 sets up masked sudo password input and live phone status on the lockscreen.
 It keeps backups and supports rollback. Add `--android PHONE_SERIAL` to also
 build and update the Android app over ADB. See

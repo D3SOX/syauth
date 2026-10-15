@@ -284,7 +284,7 @@ def output(command):
 
 def system_action(args):
     if os.geteuid() != 0:
-        raise ValueError("System installation requires pkexec")
+        raise ValueError("System installation requires root privileges")
     user = pwd.getpwnam(args.user)
     if user.pw_uid == 0 or not re.fullmatch(r"[a-z_][a-z0-9_-]*\$?", user.pw_name):
         raise ValueError("Select an ordinary local user with a PAM-compatible login name")
@@ -322,7 +322,7 @@ def install_system(root, user, module):
 
 
 def elevate(args, action):
-    run(["pkexec", "/usr/bin/python3", Path(__file__).resolve(), "--system-action", action,
+    run(["sudo", "/usr/bin/python3", Path(__file__).resolve(), "--system-action", action,
          "--user", pwd.getpwuid(os.getuid()).pw_name, "--artifacts-dir", args.artifacts_dir])
 
 
@@ -371,7 +371,7 @@ def preflight(args):
     release = Path("/etc/os-release").read_text()
     if not re.search(r"^ID=\"?arch\"?$", release, re.M):
         raise ValueError("This installer supports Arch Linux with KDE Plasma; other systems need the manual guide")
-    require(["pkexec", "systemctl", "kreadconfig6", "kwriteconfig6", "bluetoothctl", "pacman", "ldd", "nm"])
+    require(["sudo", "systemctl", "kreadconfig6", "kwriteconfig6", "bluetoothctl", "pacman", "ldd", "nm"])
     versions = output(["pacman", "-Q", "plasma-desktop", "kscreenlocker"])
     if any(tuple(map(int, line.split()[1].split(":")[-1].split(".")[:2])) < (6, 8) for line in versions.splitlines()):
         raise ValueError("Live lockscreen status requires Plasma and kscreenlocker 6.8 or newer")
@@ -430,7 +430,7 @@ def install_desktop(args):
             print("".join(difflib.unified_diff(before, plan[path][0].decode().splitlines(keepends=True),
                                              fromfile=str(path), tofile=str(path))), end="")
         build = "use existing desktop binaries" if args.skip_build else "build desktop binaries"
-        print(f"Dry run: {build}, back up existing files, install sudo/PAM and live Plasma status via pkexec, enable the user daemon.")
+        print(f"Dry run: {build}, back up existing files, install sudo/PAM and live Plasma status via sudo, enable the user daemon.")
         if args.android:
             print(f"Optional Android: build the AAR and APK, then update device {args.android} for Android user 0.")
         return
@@ -564,12 +564,12 @@ def main():
         if not args.user:
             parser.error("System phase requires --user")
         if os.geteuid() != 0:
-            raise ValueError("System installation requires pkexec")
+            raise ValueError("System installation requires root privileges")
         with installation_lock(Path("/var/lib/syauth-installer.lock")):
             system_action(args)
         return
     if os.geteuid() == 0:
-        parser.error("Run as your desktop user, not with sudo or pkexec. The installer elevates only its system phase.")
+        parser.error("Run as your desktop user. The installer uses sudo only for its system phase.")
     if args.dry_run and args.action != "install":
         parser.error("--dry-run is supported only for install")
     lock = contextlib.nullcontext() if args.dry_run else installation_lock(paths_for_user()[3] / ".installer.lock")
@@ -581,7 +581,7 @@ def main():
         elif args.action == "pair":
             pair()
         else:
-            run(["pkexec", "/usr/bin/bash", REPO / "deploy/arch/install-update-check.sh"])
+            run(["sudo", "/usr/bin/bash", REPO / "deploy/arch/install-update-check.sh"])
 
 
 if __name__ == "__main__":

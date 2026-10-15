@@ -31,10 +31,9 @@ python3 scripts/install.py
 The dry run prints the proposed PAM changes without building, elevating, or
 writing files. The installation builds release binaries as your user, installs
 the CLI under `~/.local/bin` and daemon under `~/.local/libexec`, and configures
-the systemd user service. A local `pkexec` dialog authorizes installation of the
-PAM module and the selected user's sudo/KDE rules. Run it locally in KDE; an SSH
-session without an authentication agent cannot complete that step. Do not run
-the whole script with sudo or pkexec.
+the systemd user service. It uses `sudo` in the terminal to install the PAM
+module and the selected user's sudo/KDE rules. Run the installer as your normal
+desktop user; it requests administrator access only for system changes.
 
 Sudo gets `terminal_prompt pwfeedback`. KDE uses empty-field Enter for phone
 requests and keeps password authentication available. The script installs the

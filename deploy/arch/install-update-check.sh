@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $(id -u) != 0 ]]; then
-    echo 'Run this installer with sudo or pkexec.' >&2
+    echo 'Run this installer with sudo.' >&2
     exit 1
 fi
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
