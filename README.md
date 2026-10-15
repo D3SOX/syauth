@@ -66,6 +66,21 @@ Authorize/Disallow screen. Authorize retries biometrics; Disallow declines.
 
 ## Quick start
 
+On Arch Linux with Plasma 6.8 or newer, install the desktop integration from your
+normal user session:
+
+```sh
+python3 scripts/install.py --dry-run
+python3 scripts/install.py
+```
+
+The installer builds the desktop binaries, uses `pkexec` for system files, and
+sets up masked sudo password input and live phone status on the lockscreen.
+It keeps backups and supports rollback. Add `--android PHONE_SERIAL` to also
+build and update the Android app over ADB. See
+[scripted installation](docs/getting-started.md#install-with-the-script) for
+prerequisites, pairing, phone-only reconnect settings, and rollback commands.
+
 For the tested Arch Linux / KDE Plasma / Pixel setup, follow:
 
 1. [Build, install, and pair](docs/getting-started.md), including the native

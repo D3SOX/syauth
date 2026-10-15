@@ -12,6 +12,118 @@ The live lockscreen status integration was also tested with Plasma 6.8. For
 sudo, the [combined password/phone prompt](pam.md#password-entry-while-phone-approval-waits)
 accepts password input while phone approval is pending and supports asterisks.
 
+## Install with the script
+
+Use Python 3.11 or newer from your normal desktop user session on Arch Linux
+with Plasma and kscreenlocker 6.8 or newer. Install the Rust toolchain and
+desktop build prerequisites listed below first. The script checks prerequisites
+and PAM compatibility before building. It does not install system packages.
+Enable Bluetooth before starting. If `~/.local/bin` is not on your `PATH`, use
+`~/.local/bin/syauth` explicitly after installation.
+
+From the repository root:
+
+```sh
+python3 scripts/install.py --dry-run
+python3 scripts/install.py
+```
+
+The dry run prints the proposed PAM changes without building, elevating, or
+writing files. The installation builds release binaries as your user, installs
+the CLI under `~/.local/bin` and daemon under `~/.local/libexec`, and configures
+the systemd user service. A local `pkexec` dialog authorizes installation of the
+PAM module and the selected user's sudo/KDE rules. Run it locally in KDE; an SSH
+session without an authentication agent cannot complete that step. Do not run
+the whole script with sudo or pkexec.
+
+Sudo gets `terminal_prompt pwfeedback`. KDE uses empty-field Enter for phone
+requests and keeps password authentication available. The script installs the
+live status label into the active Plasma shell package. It preserves account,
+password, and session rules, and leaves global PAM files and SDDM unchanged.
+It supports stock Arch stacks and the documented empty-submission setup.
+An existing automatic phone block in `kde-fingerprint` must first be removed
+using the [PAM guide](pam.md#kde-request-the-phone-with-an-empty-submission).
+Unfamiliar custom stacks stop for review.
+
+To configure reconnects for only your phone, supply its bonded BlueZ address:
+
+```sh
+python3 scripts/install.py --phone-address AA:BB:CC:DD:EE:FF
+```
+
+Use `bluetoothctl devices Paired` to find the phone's address. Omitting this
+option preserves an existing `phone.conf`; on a fresh installation it leaves
+forced desktop reconnects disabled. Other Bluetooth devices are untouched.
+
+### Optional Android installation and pairing
+
+Install OpenJDK, Android SDK platform 34, platform-tools, an Android NDK, and
+`cargo-ndk` as described below. Set `JAVA_HOME` and `ANDROID_HOME`; set `NDK_HOME`
+to choose an installed NDK explicitly. Otherwise the script selects the newest
+installed stable NDK under the SDK's `ndk` directory.
+
+```sh
+adb devices -l
+python3 scripts/install.py --android PHONE_SERIAL
+python3 scripts/install.py pair
+```
+
+Replace `PHONE_SERIAL` with the intended ADB device. The Android option prepares
+a UniFFI tool matching `Cargo.lock`, installs the Rust Android targets, builds
+the native AAR and debug APK, runs Android JVM tests, and updates the app for
+Android user 0. Production pairing needs Android 13/API 33+ with Keystore
+Ed25519 support. The selected device must currently be using user 0. Existing app
+data is preserved; updating requires the same debug signing key. SDK setup and
+license acceptance remain prerequisites. The script does not uninstall an app
+when signing keys differ.
+
+The pairing command pauses the running desktop daemon and restores it afterward,
+including when pairing fails or is cancelled. Open the phone's pairing screen
+and compare and confirm both the Bluetooth and app codes on both devices.
+Existing bonds are retained unless you explicitly pair or revoke them.
+
+For already built artifacts, use `--skip-build`. The desktop artifacts default
+to `target/release`; `--artifacts-dir /absolute/path/to/artifacts` overrides that
+location. With `--android`, this also reuses the existing debug APK. The installer
+checks the desktop ELF files, PAM exports, and module dependencies before copying.
+
+### Backups, rollback, and update checks
+
+Repeat installation updates the managed files without adding duplicate PAM
+rules. The first originals remain in `/var/lib/syauth-installer` for system
+files and `~/.local/state/syauth/installer` for your user files. The user state
+location follows `XDG_STATE_HOME`. A failed file transaction restores the files
+from that attempt. Rollback restores the setup from before the first installation:
+
+```sh
+python3 scripts/install.py rollback
+```
+
+An interrupted process leaves a recovery journal. Use the same rollback command
+before retrying; concurrent installers are refused.
+
+Rollback restores service state, PAM files, desktop binaries, lockscreen settings,
+and any previous shell override. It preserves pairing keys and the Android app.
+If managed files have been edited since installation, the script stops before
+overwriting them and identifies the backup directory for review. Keep backups
+until the new setup has passed phone approval, password fallback, and timeout
+checks in the [PAM guide](pam.md).
+
+After those checks, optionally install the Arch update checker and record its
+baseline:
+
+```sh
+python3 scripts/install.py update-check
+```
+
+This explicit step uses the existing pacman-hook installer. It refuses an
+existing checker or baseline so a repeat command cannot silently approve
+changes. Follow the [update-check guide](pam.md#check-the-setup-after-pacman-updates)
+to maintain or remove it. Desktop rollback leaves this separately installed
+checker and its baseline in place.
+
+The following sections document the equivalent manual setup.
+
 ## Desktop binaries and storage
 
 Install Rust, a C linker, the BlueZ development files, and enable Bluetooth.
