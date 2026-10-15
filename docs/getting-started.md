@@ -8,6 +8,10 @@ The parallel setup permits password unlock while phone approval waits and
 cancels its pending dialog. Login/SDDM and global PAM stacks are outside this
 procedure.
 
+The live lockscreen status integration was also tested with Plasma 6.8. For
+sudo, the [combined password/phone prompt](pam.md#password-entry-while-phone-approval-waits)
+accepts password input while phone approval is pending and supports asterisks.
+
 ## Desktop binaries and storage
 
 Install Rust, a C linker, the BlueZ development files, and enable Bluetooth.
@@ -189,6 +193,32 @@ Follow [sudo and KDE PAM setup](pam.md). First test the module without changing
 system stacks, then sudo, then KDE phone unlock and password fallback. Keep a
 working desktop session and the documented rollback available during setup.
 
+Enable `terminal_prompt` for concurrent sudo password entry. Add its `pwfeedback`
+option for asterisks; sudoers' `Defaults pwfeedback` does not control this prompt.
+Phone approval finishes without Enter and discards any partial password. Enter
+submits the password to the existing password module and dismisses the phone
+request. Clear cached authentication with `sudo -k` before testing each path.
+
+For empty-field phone requests on Plasma 6.8, install
+[live lockscreen status](pam.md#live-phone-status-on-the-lockscreen). It uses a
+Plasma shell package override and shows whether the phone's notification
+subscription is ready before you press Enter. Password entry stays available.
+Rerun the installer after Plasma upgrades to refresh the copied shell files.
+
+### Check connection recovery
+
+With the daemon running, use `syauth status --json` to inspect the peer's
+`connected` field. Turn phone Bluetooth off, confirm it becomes `false`, then
+turn Bluetooth on and wait for `true` before requesting approval. Repeat after
+leaving the laptop's range and returning. These checks should not require
+reopening the phone app or pairing again.
+
+The client retries every 15 seconds until notification setup succeeds, including
+when Android initially rejects a GATT connection. Radio discovery can take
+longer than that interval. See [connection recovery and measured results](bluetooth.md#recovery-after-leaving-range-or-restarting-bluetooth).
+
+### Verified behavior
+
 The completed acceptance checks on the tested laptop were:
 
 - `sudo -k; sudo true` approved by a Pixel fingerprint.
@@ -196,3 +226,10 @@ The completed acceptance checks on the tested laptop were:
 - Meta+L, then laptop password unlocked KDE and dismissed the pending phone dialog.
 - Headphones stayed connected across daemon restarts after limiting reconnect to
   the phone address.
+
+Additional checks on 2026-10-15 covered masked password editing in a private
+PAM/PTY test, automatic fingerprint prompts, password submission dismissing both
+phone dialogs, and live status changes in an isolated Plasma 6.8 greeter. The
+Pixel recovered Bluetooth off/on and a simulated unavailable desktop without
+reopening the app. Physical range loss and long idle periods still need separate
+acceptance checks.
