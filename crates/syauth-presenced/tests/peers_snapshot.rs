@@ -51,9 +51,17 @@ async fn peers_snapshot_returns_one_row_per_bonded_peer() {
     assert!(ids.contains(&bond_a.peer_id));
     assert!(ids.contains(&bond_b.peer_id));
     for row in &snap {
+        assert_eq!(row.connected, Some(false), "an idle bond is not a connected phone");
         assert_eq!(row.in_flight_challenges, 0, "no challenges issued yet");
         assert!(row.last_challenge_ms_ago.is_none(), "cold start has no last challenge");
         assert!(row.last_connect_ms_ago.is_none(), "cold start has no last connect");
         assert_ne!(row.current_session_uuid, uuid::Uuid::nil(), "uuid populated");
     }
+    fake.set_connected(&bond_a.peer_id, true);
+    let snap = orchestrator.peers_snapshot().await;
+    assert_eq!(snap.iter().find(|r| r.peer_id == bond_a.peer_id).unwrap().connected, Some(true));
+    assert!(fake.notify_calls().is_empty(), "status must never request phone approval");
+    fake.set_connected(&bond_a.peer_id, false);
+    let snap = orchestrator.peers_snapshot().await;
+    assert_eq!(snap.iter().find(|r| r.peer_id == bond_a.peer_id).unwrap().connected, Some(false));
 }

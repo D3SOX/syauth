@@ -95,6 +95,7 @@ impl Drop for FakeStatusDaemon {
 
 fn peer_row(peer_id: &str) -> PeerStatus {
     PeerStatus {
+        connected: Some(false),
         peer_id: peer_id.to_owned(),
         last_challenge_ms_ago: Some(TEST_LAST_CHALLENGE_MS),
         last_connect_ms_ago: Some(TEST_LAST_CONNECT_MS),

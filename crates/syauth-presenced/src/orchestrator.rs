@@ -107,6 +107,8 @@ pub const RELOAD_CHANNEL_CAPACITY: usize = 16;
 /// per-peer response characteristic.
 pub const DEFAULT_AUTH_TIMEOUT: StdDuration = StdDuration::from_millis(8000);
 
+const CANCELLATION_SEND_BUDGET: StdDuration = StdDuration::from_millis(100);
+
 /// Width in bytes of the per-challenge nonce. The value matches
 /// `syauth_core::NONCE_LEN` (SPEC §3 scope item #6); the constant
 /// is re-exposed here so the orchestrator's call site reads as a
@@ -822,7 +824,12 @@ impl Orchestrator {
             }
         };
 
-        let permit = match self.acquire_challenge_slot(&peer_state.challenge_slot).await {
+        tokio::pin!(cancelled);
+        let acquired = tokio::select! {
+            permit = self.acquire_challenge_slot(&peer_state.challenge_slot) => permit,
+            () = &mut cancelled => return ChallengeOutcome::Cancelled,
+        };
+        let permit = match acquired {
             Some(p) => p,
             None => {
                 let t_end_ms = epoch_millis(SystemTime::now());
@@ -845,7 +852,7 @@ impl Orchestrator {
             });
         }
         let outcome = self
-            .run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms, cancelled)
+            .run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms, &mut cancelled)
             .await;
         drop(permit);
         outcome
@@ -1018,8 +1025,9 @@ impl Orchestrator {
             frame.tag = syauth_core::compute_tag(&peer_state.bond_key, &body);
             let mut encoded = Vec::new();
             if frame.encode(&mut encoded).is_ok() {
-                if let Err(error) = self.peripheral.notify_challenge(peer_id, &encoded).await {
-                    tracing::warn!(peer_id, %error, "could not dismiss cancelled phone approval");
+                let send = tokio::time::timeout(CANCELLATION_SEND_BUDGET, self.peripheral.notify_challenge(peer_id, &encoded)).await;
+                if !matches!(send, Ok(Ok(()))) {
+                    tracing::warn!(peer_id, "could not dismiss cancelled phone approval");
                 }
             }
         }
@@ -1097,6 +1105,7 @@ impl Orchestrator {
             let in_flight = challenge_slot_in_flight(&entry.challenge_slot);
             let uuid_bytes = session_uuid_for(&entry.bond_key, minute);
             rows.push(crate::rpc::PeerStatus {
+                connected: Some(self.peripheral.is_connected(peer_id).await),
                 peer_id: peer_id.clone(),
                 last_challenge_ms_ago: ms_since(now, liveness.last_challenge_at),
                 last_connect_ms_ago: ms_since(now, liveness.last_connect_at),

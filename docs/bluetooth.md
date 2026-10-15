@@ -77,6 +77,31 @@ waited for the phone's subscription, and accepted a fingerprint in 2.6 seconds.
 The daemon tests cover subscription recovery in the same request, a shared
 eight-second deadline, cancellation during recovery, and an absent phone.
 
+## Recovery after leaving range or restarting Bluetooth
+
+The phone service watches Android's Bluetooth adapter state. Turning Bluetooth
+off closes its GATT handles and stops retry timers. Turning it on starts the
+bonded connections again without opening the app.
+
+After a link drops, the client keeps retrying connection and notification setup.
+A failed GATT open, including a null handle, leaves the 15-second watchdog armed.
+Only a successful notification subscription stops retries. This cadence is a
+retry interval, not a maximum time to find the desktop over the radio.
+
+The phone clears the previous notification subscription before enabling it again.
+BlueZ can retain the old subscription after a link drops even though its writer
+has closed. Enabling an already enabled subscription can then appear successful
+on Android while the desktop cannot send requests. Clearing and enabling it
+forces a fresh subscription before the connection is considered ready.
+
+On 2026-10-15, the Pixel on Android 16 recovered a Bluetooth off/on cycle in
+about 5 seconds. With phone Bluetooth left on, the test made the laptop
+peripheral unavailable for 45 seconds. After it returned, the phone reconnected
+and the desktop acquired a live notification writer after about 48 seconds.
+Neither check reopened the phone app or manually connected the devices.
+This tests peer availability without a radio restart; it does not measure a
+walk out of physical radio range or hours of phone idle time.
+
 ## Emulator transport test
 
 The transport test passed on Android 15/API 35 with Emulator 37.1.11. A

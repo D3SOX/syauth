@@ -24,14 +24,18 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.sy.syauth.android.bond.BondRecord
 import com.sy.syauth.android.bond.loadPersistedBond
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -240,6 +244,21 @@ public class SyauthCompanionService : Service() {
     private val clients: ConcurrentHashMap<String, ManagedClient> =
         ConcurrentHashMap()
 
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            if (state != BluetoothAdapter.STATE_ON &&
+                state != BluetoothAdapter.STATE_TURNING_OFF && state != BluetoothAdapter.STATE_OFF) return
+            Log.i(SYAUTH_BG_LOG_TAG, "Bluetooth state=$state: updating bonded connections")
+            for ((peerId, client) in clients) {
+                runCatching {
+                    if (state == BluetoothAdapter.STATE_ON) client.start() else client.stop()
+                }.onFailure { Log.w(SYAUTH_BG_LOG_TAG, "Bluetooth recovery failed peer=$peerId", it) }
+            }
+        }
+    }
+
     /**
      * The foreground type passed to the most recent `startForeground`
      * call. Robolectric 4.11.1's `ShadowService` does not expose
@@ -258,6 +277,9 @@ public class SyauthCompanionService : Service() {
         startForegroundCompat(notification)
         ensureDefaultGattClientFactory()
         ensureDefaultCompanionSeams()
+        // Bluetooth broadcasts come from a privileged app outside the system UID.
+        ContextCompat.registerReceiver(this, bluetoothStateReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED)
         injectClientsForBonds()
         isRunning.set(true)
         Log.i(SYAUTH_BG_LOG_TAG, "onCreate: foreground up, clients=${clients.size}")
@@ -271,6 +293,7 @@ public class SyauthCompanionService : Service() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(bluetoothStateReceiver)
         for ((peerId, client) in clients) {
             runCatching { client.stop() }
                 .onFailure {

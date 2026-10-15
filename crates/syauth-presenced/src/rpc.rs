@@ -116,6 +116,9 @@ pub enum Response {
 /// sub-second freshness on the row that just landed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerStatus {
+    /// Live challenge subscription readiness; absent on older daemons.
+    #[serde(default)]
+    pub connected: Option<bool>,
     /// Bond identifier (matches `Request::Challenge::peer_id`).
     pub peer_id: String,
     /// Milliseconds since the daemon last issued a challenge for
@@ -385,6 +388,7 @@ mod tests {
     fn response_status_roundtrips() {
         let original = Response::Status {
             peers: vec![PeerStatus {
+                connected: Some(false),
                 peer_id: "peer-a".to_string(),
                 last_challenge_ms_ago: Some(42_000),
                 last_connect_ms_ago: None,

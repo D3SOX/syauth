@@ -103,6 +103,18 @@ private fun fixtureIntent(): Intent {
 @Config(sdk = [34])
 class BiometricPromptTest {
 
+    @Test
+    fun reused_activity_opens_biometrics_for_the_new_request() {
+        val gate = RecordingBiometricGate()
+        ChallengeApprovalActivity.biometricGate = gate
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+        val next = fixtureIntent().putExtra(EXTRA_CHALLENGE_BYTES, ByteArray(FIXTURE_CHALLENGE_LEN) { (it + 1).toByte() })
+        controller.newIntent(next)
+        assertEquals("each distinct request opens a biometric operation", 2, gate.callCount)
+        controller.pause().stop().destroy()
+    }
+
     @Before
     fun setup() {
         ChallengeApprovalActivity.biometricGate = RecordingBiometricGate()

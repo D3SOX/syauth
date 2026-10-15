@@ -20,6 +20,8 @@
 package com.sy.syauth.android.bg
 
 import android.content.Intent
+import android.os.Looper
+import org.robolectric.Shadows.shadowOf
 import android.content.pm.ActivityInfo
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
@@ -67,9 +69,25 @@ class ChallengeApprovalActivityTest {
         }
     }
 
+    @Test
+    fun late_cancellation_cannot_close_a_newer_request_in_the_same_activity() {
+        val controller = Robolectric.buildActivity(ChallengeApprovalActivity::class.java, fixtureIntent())
+            .create().start().resume()
+        val newer = fixtureIntent().putExtra(EXTRA_CHALLENGE_BYTES, ByteArray(FIXTURE_CHALLENGE_LEN) { (it + 10).toByte() })
+        controller.newIntent(newer)
+        SyauthCompanionService.cancelledApproval.value = FIXTURE_PEER_ID to ByteArray(16) { (it + 1).toByte() }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("old cancellation cannot close the new approval", !controller.get().isFinishing)
+        SyauthCompanionService.cancelledApproval.value = FIXTURE_PEER_ID to ByteArray(16) { (it + 11).toByte() }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(controller.get().isFinishing)
+        controller.pause().stop().destroy()
+    }
+
     @After
     fun cleanup() {
         ChallengeApprovalActivity.resetSeams()
+        SyauthCompanionService.cancelledApproval.value = null
     }
 
     @Test

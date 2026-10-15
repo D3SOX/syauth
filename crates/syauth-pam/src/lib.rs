@@ -41,3 +41,5 @@ pub mod auth;
 pub mod config;
 pub mod entry;
 mod submission;
+
+mod terminal;

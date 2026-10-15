@@ -84,6 +84,15 @@ normal password authentication. For automatic requests with simultaneous
 password unlock, use the parallel `kde-fingerprint` service instead. Both
 configurations are in the [PAM guide](docs/pam.md).
 
+For sudo, `terminal_prompt` accepts a password while phone approval waits.
+Phone approval finishes without Enter and discards unfinished password input.
+Submitting a password dismisses the pending phone request. Add the PAM option
+`pwfeedback` to display asterisks in this combined prompt.
+
+On Plasma 6.8, [live lockscreen status](docs/pam.md#live-phone-status-on-the-lockscreen)
+shows whether the phone is connected before you press Enter. The installer creates
+a user-owned shell package, preserves the password field, and supports rollback.
+
 The generic `install-pam` / `uninstall-pam` commands remain available for other
 PAM services. Review their output and the target distro's module paths before
 applying it; the per-user socket and KDE stack need the explicit setup

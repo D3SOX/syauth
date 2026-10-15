@@ -57,7 +57,7 @@ its first auth line, insert these lines, leaving all original lines intact:
 
 ```pam
 auth [success=1 default=ignore] pam_succeed_if.so user != LOCAL_USER quiet
-auth sufficient pam_syauth.so socket=/run/user/1000/syauth/auth.sock
+auth sufficient pam_syauth.so terminal_prompt socket=/run/user/1000/syauth/auth.sock
 ```
 
 For the selected user, syauth is tried first; other users skip it. The original
@@ -71,6 +71,48 @@ sudo install -m644 /path/to/scratch/sudo /etc/pam.d/sudo
 Test `sudo -k; sudo true` and approve the Pixel biometric prompt. Then repeat with
 the phone unavailable or select Disallow on the approval screen. Verify that
 the original password path still works before proceeding.
+
+### Password entry while phone approval waits
+
+Install the updated PAM module before adding `terminal_prompt`. The prompt reads
+`Password or approve on your phone:` and accepts a password immediately. Submit
+with Enter, or approve the phone fingerprint to finish without Enter. Phone
+approval discards unfinished password input. Password submission closes the
+phone request, including an open biometric dialog. Password verification still
+runs through the existing password module.
+
+For masked character feedback, add `pwfeedback` to that same PAM line:
+
+```pam
+auth sufficient pam_syauth.so terminal_prompt pwfeedback socket=/run/user/1000/syauth/auth.sock
+```
+
+The combined prompt reads the terminal itself, so sudo's `Defaults pwfeedback`
+does not control it. The PAM option enables asterisks, backspace, Ctrl+U to clear
+the line, and Ctrl+W to erase a word. Without it, input stays invisible.
+
+The next password module must reuse `PAM_AUTHTOK`, for example with
+`pam_unix.so try_first_pass`. Phone denial or timeout leaves password entry
+available. Ctrl+C cancels authentication and restores terminal settings.
+Redirected input uses the application's usual password conversation. Sudo's
+normal `PAM_SILENT` flag does not suppress this interactive prompt.
+Do not combine `terminal_prompt` with `on_empty_password`.
+
+Test both paths with cached sudo authentication cleared:
+
+```sh
+sudo -k
+sudo -i
+```
+
+Approve on the phone once, then repeat and submit the laptop password while
+phone approval is pending. The phone request should close. With `pwfeedback`,
+check typing and backspace before submitting. The private terminal tests use a
+disposable libpam service and a test password, without changing sudo's PAM stack:
+
+```sh
+python3 scripts/test-pam-terminal.py --module target/debug/libpam_syauth.so
+```
 
 ## KDE: request the phone with an empty submission
 
@@ -149,6 +191,50 @@ approval from the Pixel 8 Pro. The real lock-screen tests also passed on
 2026-10-08. The Pixel stayed quiet until empty-field Enter, its fingerprint
 unlocked KDE, typing the laptop password caused no phone prompt, and password
 unlock worked after a phone request timed out.
+
+## Live phone status on the lockscreen
+
+With the empty-submission setup above, Plasma 6.8 can show live connection status
+before Enter. Update the daemon and CLI, then run as your desktop user:
+
+```sh
+python3 scripts/install-kde-status.py --cli "$(command -v syauth)"
+```
+
+Use `--cli /absolute/path/to/syauth-status` for a separately installed status
+client. The selected executable must support `status --json`. No root access is
+needed. The next lockscreen shows connected, disconnected, or unavailable status
+and keeps password entry available. Status checks never request approval.
+
+The label polls once per second and reports unavailable after three seconds
+without a usable reply. `connected` comes from the current GATT notification
+subscription, so historical connection timestamps do not count as readiness.
+Unknown state, malformed output, and older daemons show unavailable.
+
+Plasma 6.8 loads the lockscreen from its shell package. The installer reads
+`plasmashellrc`'s `Shell/ShellPackage`, defaulting to `org.kde.plasma.desktop`,
+and creates a complete override under `~/.local/share/plasma/shells/`.
+A look-and-feel theme's `contents/lockscreen` directory is not the installation
+target for this version. The live label replaces only syauth's static phone
+instruction; authentication errors and other PAM prompts remain visible.
+
+The override copies the shell package, including its other desktop files.
+Rerun the installer after Plasma upgrades to refresh vendor files. An existing
+custom user package is backed up under `~/.local/state/syauth/kde-status` and
+remains the source for repeated installs. Use `--shell-dir` or `--source` to
+select package locations explicitly. To restore the previous package:
+
+```sh
+python3 scripts/install-kde-status.py --uninstall
+```
+
+Test by switching the phone's Bluetooth off and on while the password field is
+visible. The text should change without Enter. Native greeter checks on Plasma
+6.8 use a private D-Bus session and isolated PAM configuration:
+
+```sh
+python3 scripts/test-kde-greeter.py
+```
 
 ## KDE: request the phone automatically
 
@@ -288,6 +374,8 @@ Run its private fixture tests with
 | Option | Behavior |
 | --- | --- |
 | `socket=PATH` | Select the daemon socket. The default is `$XDG_RUNTIME_DIR/syauth/auth.sock`, or `/run/user/$UID/syauth/auth.sock` if unset. |
+| `terminal_prompt` | Accept a terminal password while phone approval waits. Off by default; incompatible with `on_empty_password`. |
+| `pwfeedback` | Show asterisks with `terminal_prompt`. Off by default; independent of sudoers. |
 | `on_empty_password` | Wait for a submission. Request the phone only for an empty response; cache typed passwords for the next module. Off by default. |
 
 The module logs through syslog with facility `LOG_AUTHPRIV` and tag `pam_syauth`.
@@ -296,7 +384,7 @@ It never logs submitted passwords.
 | Result | Meaning |
 | --- | --- |
 | `PAM_SUCCESS` | The daemon verified the phone response. |
-| `PAM_IGNORE` | A nonempty password was submitted in `on_empty_password` mode. The next password module should reuse `PAM_AUTHTOK`, such as with `try_first_pass`. |
+| `PAM_IGNORE` | A password was submitted in `terminal_prompt` or a nonempty password in `on_empty_password` mode. The next password module should reuse `PAM_AUTHTOK`, such as with `try_first_pass`. |
 | `PAM_AUTH_ERR` | The phone declined, verification failed, the submission conversation failed, or Rust caught a panic. |
 | `PAM_AUTHINFO_UNAVAIL` | The daemon or peer was unavailable, busy, or timed out. |
 

@@ -57,7 +57,11 @@ the non-exportable phone signing key.
 ## Password fallback and cancellation
 
 The tested sudo configuration uses `auth sufficient pam_syauth.so` before the
-existing auth stack. Phone absence or denial leaves that stack available. KDE
+existing auth stack. With `terminal_prompt`, password entry is available while phone approval waits.
+Submitted passwords remain in PAM for the existing password module to verify.
+Optional `pwfeedback` reveals the number of entered characters through asterisks;
+it never echoes the password. Phone absence or denial leaves the password stack
+available. KDE
 runs phone approval through its parallel `kde-fingerprint` service while its
 normal `kde` password service remains available. Preserve the existing mandatory
 checks and verify password fallback before relying on either setup.

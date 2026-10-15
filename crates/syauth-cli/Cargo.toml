@@ -20,7 +20,7 @@ name = "syauth"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
+anyhow = "1.0.104"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
 tempfile = "3"
@@ -48,7 +48,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 # build a real `bluer`-backed `PairBackend` does not have to add a duplicate
 # dep. Matches the pin chosen in S-010.
 bluer = { version = "0.17", default-features = false, features = ["bluetoothd"] }
-async-trait = "0.1"
+async-trait = "0.1.92"
 # DEV-001 pair-backend: scan-stream extension methods (`next()`) come from
 # this trait. `syauth-transport` already pulls in 0.3; pin the same major.
 futures = "0.3"

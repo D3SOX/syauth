@@ -22,7 +22,12 @@
 // Journey: specs/journeys/JOURNEY-S-011-service-foreground-lifecycle.md
 package com.sy.syauth.android.bg
 
+import android.bluetooth.BluetoothAdapter
+import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Looper
+import androidx.test.core.app.ApplicationProvider
 import com.sy.syauth.android.bond.BondRecord
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -80,6 +85,26 @@ class SyauthCompanionServiceTest {
     fun cleanup() {
         SyauthCompanionService.resetSeams()
         ChallengeApprovalActivity.resetSeams()
+    }
+
+    @Test
+    @Config(sdk = [26, 34])
+    fun bluetooth_restart_stops_stale_clients_and_restarts_bonded_connections() {
+        SyauthCompanionService.bondListProvider = BondListProvider { listOf(bondFor(FIXTURE_PEER_A)) }
+        val factory = RecordingGattClientFactory()
+        SyauthCompanionService.gattClientFactory = factory
+        val service = Robolectric.buildService(SyauthCompanionService::class.java).create()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.sendBroadcast(Intent(BluetoothAdapter.ACTION_STATE_CHANGED).putExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.STATE_TURNING_OFF))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("radio shutdown closes the stale GATT registration", 1, factory.created.single().second.stopCalls)
+        context.sendBroadcast(Intent(BluetoothAdapter.ACTION_STATE_CHANGED).putExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.STATE_ON))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("radio startup recreates the bonded connection without opening the app", 2, factory.created.single().second.startCalls)
+        service.destroy()
+        context.sendBroadcast(Intent(BluetoothAdapter.ACTION_STATE_CHANGED).putExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.STATE_ON))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("destroyed service cannot restart connections", 2, factory.created.single().second.startCalls)
     }
 
     @Test

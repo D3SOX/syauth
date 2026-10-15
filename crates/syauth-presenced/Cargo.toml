@@ -29,7 +29,7 @@ workspace = true
 thiserror = "2"
 # `anyhow` for the binary entrypoint's `Result<()>` plumbing, matching
 # the syauth-cli convention.
-anyhow = "1"
+anyhow = "1.0.104"
 # clap derive — matches syauth-cli's pattern for `--help` snapshots and
 # default-path documentation.
 clap = { version = "4", features = ["derive"] }
@@ -103,7 +103,7 @@ hex = "0.4"
 time = { version = "0.3", features = ["formatting"] }
 
 [dev-dependencies]
-async-trait = "0.1"
+async-trait = "0.1.92"
 # Smoke test spawns the release binary and drives it through SIGTERM.
 tempfile = "3"
 # Sends SIGTERM via the same `nix` surface the daemon uses; the

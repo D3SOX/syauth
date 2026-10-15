@@ -63,6 +63,12 @@ than a short-lived phone GATT server. Boot recovery and a periodic watchdog
 provide recovery paths. Force-stopping the app prevents Android background
 restart until the user opens it again; it is not an ordinary service crash.
 
+The service closes stale GATT connections when Bluetooth turns off and reopens
+them when Bluetooth turns on. After a connection drops, the client retries
+connection and notification setup every 15 seconds until subscribed again.
+Retries continue even if Android returns no GATT handle or rejects an open.
+The retry interval does not guarantee a radio connection within 15 seconds.
+
 If a connection remains stale, inspect daemon logs and the app status. Configure
 only the phone's address for [desktop Bluetooth recovery](bluetooth.md). Opening
 the app can reinitialize its connection; that is distinct from the fixed pairing
@@ -73,7 +79,8 @@ completion bug. No Bluetooth adapter reset is part of the normal procedure.
 The phone verifies the complete challenge/cancellation frame before interpreting
 its payload. Host cancellation matches the bonded peer and challenge nonce,
 closes the matching activity, cancels biometrics, and suppresses late callbacks.
-See [approval cancellation](cancellation.md).
+Submitting a sudo password in `terminal_prompt` mode dismisses both the approval
+screen and an open biometric dialog. See [approval cancellation](cancellation.md).
 
 For KDE, follow [the parallel fingerprint PAM setup](pam.md). Its separate password
 stack remains available while phone approval is pending. Password unlock dismisses
@@ -91,3 +98,15 @@ On Android 16, the current native dependencies may trigger the system's 16 KB
 page-size compatibility warning. The tested Pixel completed pairing and biometric
 approval in compatibility mode. This is a debug build, not a claim of native
 16 KB compliance or a signed store release.
+
+The October 2026 checks include native cancellation tests on Android 8/API 26
+and physical Pixel approval/cancellation over Bluetooth on Android 16. API 26
+coverage tests the approval lifecycle with a test gate; it does not establish
+Keystore Ed25519 pairing support on that Android version. Android lint still
+reports permission and API-level errors in existing pairing/connection code.
+
+When updating an installed build, use the fork's current source and preserve its
+signing identity. An older worktree can replace already installed behavior even
+when the APK version name has not changed. Update the companion before the daemon
+when deploying cancellation support, then check automatic biometrics, dismissal
+and retry, password cancellation, and pending/completed Recents behavior.

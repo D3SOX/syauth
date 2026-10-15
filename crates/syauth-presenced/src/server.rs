@@ -25,9 +25,8 @@ use std::{
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use thiserror::Error;
 use tokio::{
-    io::AsyncReadExt,
     net::{UnixListener, UnixStream},
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc},
     task::JoinHandle,
 };
 
@@ -306,22 +305,21 @@ async fn handle_connection(
     }
     let request: Request = read_frame(&mut stream).await?;
     tracing::debug!(?request, "request decoded");
-    let (mut reader, mut writer) = stream.split();
-    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let mut unexpected = [0u8; 1];
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
     let response = dispatch(&request, &reload_tx, orchestrator.as_ref(), test_fixed_nonce, started_at, cancel_rx);
     tokio::pin!(response);
-    let mut extra = [0u8; 1];
     let response = tokio::select! {
-        response = &mut response => Some(response),
-        _ = reader.read(&mut extra) => {
+        response = &mut response => response,
+        // This protocol allows one request per connection. EOF or extra input
+        // cancels a pending challenge, dropping its semaphore permit immediately.
+        _ = tokio::io::AsyncReadExt::read(&mut stream, &mut unexpected) => {
             let _ = cancel_tx.send(());
             let _ = response.await;
-            None
-        }
+            return Ok(());
+        },
     };
-    if let Some(response) = response {
-        write_frame(&mut writer, &response).await?;
-    }
+    write_frame(&mut stream, &response).await?;
     Ok(())
 }
 
@@ -349,7 +347,7 @@ async fn dispatch(
     orchestrator: Option<&Arc<Orchestrator>>,
     test_fixed_nonce: Option<[u8; NONCE_BYTES]>,
     started_at: SystemTime,
-    cancelled: oneshot::Receiver<()>,
+    cancelled: tokio::sync::oneshot::Receiver<()>,
 ) -> Response {
     match request {
         Request::Challenge { peer_id, .. } => match orchestrator {

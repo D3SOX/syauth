@@ -112,6 +112,9 @@ struct ReconnectingPeripheral {
 
 #[async_trait::async_trait]
 impl Peripheral for ReconnectingPeripheral {
+    async fn is_connected(&self, peer_id: &str) -> bool {
+        Instant::now() >= self.ready_at && self.fake.is_connected(peer_id).await
+    }
     async fn add_peer(&self, peer_id: &str, bond_key: &[u8; BOND_KEY_BYTES]) -> Result<(), PeripheralError> {
         self.fake.add_peer(peer_id, bond_key).await
     }
@@ -372,6 +375,14 @@ async fn times_out_returns_authinfo_unavail() {
         ChallengeOutcome::TimedOut => {}
         other => panic!("expected TimedOut, got {other:?}"),
     }
+
+    let calls = fake.notify_calls();
+    assert_eq!(calls.len(), 2, "timeout must withdraw the pending phone approval");
+    let challenge = Frame::decode(&calls[0].1).unwrap();
+    let cancel = Frame::decode(&calls[1].1).unwrap();
+    assert_eq!(cancel.nonce, challenge.nonce);
+    assert_eq!(cancel.payload, b"cancel");
+    assert!(syauth_core::verify_tag(&BOND_KEY, &cancel.body_bytes().unwrap(), &cancel.tag));
 
     assert_eq!(count_lines(&audit_path), 1);
     assert_eq!(outcome_columns(&audit_path), vec![OUTCOME_REASON_RESPONSE_TIMEOUT.to_owned()]);

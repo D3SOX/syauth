@@ -165,6 +165,8 @@ public class PersistentGattClient internal constructor(
     )
 
     private val gatt: AtomicReference<BluetoothGatt?> = AtomicReference(null)
+    private enum class SubscriptionPhase { IDLE, RESETTING, ENABLING, READY }
+    private val subscriptionPhase = AtomicReference(SubscriptionPhase.IDLE)
 
     /**
      * Set to `true` while the client is intentionally torn down via
@@ -184,8 +186,8 @@ public class PersistentGattClient internal constructor(
      * after Doze, screen-off, or a long out-of-range absence it can
      * take many minutes to re-acquire the peer on its own. A fresh
      * `connectGatt` call resets Android's scan timer, so a periodic
-     * `forceReconnect()` from a watchdog converts that into a
-     * deterministic ~RECONNECT_INTERVAL_MS recovery window.
+     * `forceReconnect()` retries a stalled client without another
+     * app launch. The interval bounds retries, not radio acquisition.
      *
      * The watchdog re-arms itself through `forceReconnect()` →
      * `start()` (which schedules the next tick), so a single tick
@@ -214,21 +216,27 @@ public class PersistentGattClient internal constructor(
     public fun start() {
         stopped.set(false)
         if (gatt.get() != null) return
+        subscriptionPhase.set(SubscriptionPhase.IDLE)
+        // Registration can fail while Android's Bluetooth service is restarting.
+        // Retry even when no handle exists and no callback can arrive.
+        armReconnectWatchdog()
         val device = runCatching { adapter.getRemoteDevice(deviceMac) }.getOrNull()
         if (device == null) {
             Log.w(PERSISTENT_GATT_LOG_TAG, "start: getRemoteDevice($deviceMac) null")
             return
         }
         Log.i(PERSISTENT_GATT_LOG_TAG, "start: opening autoConnect=true to $deviceMac")
-        val handle = gattOpener.open(device, AUTO_CONNECT_TRUE, gattCallback)
+        val handle = try {
+            gattOpener.open(device, AUTO_CONNECT_TRUE, gattCallback)
+        } catch (error: RuntimeException) {
+            Log.w(PERSISTENT_GATT_LOG_TAG, "start: connectGatt failed; retry scheduled", error)
+            return
+        }
         if (handle == null) {
             Log.w(PERSISTENT_GATT_LOG_TAG, "start: connectGatt returned null")
             return
         }
         gatt.set(handle)
-        // A connected link cannot receive requests until notifications are enabled.
-        // Keep retrying if connection, discovery, or subscription never completes.
-        armReconnectWatchdog()
     }
 
     private fun armReconnectWatchdog() {
@@ -325,13 +333,8 @@ public class PersistentGattClient internal constructor(
                     discoverServices(g)
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    // Arm the watchdog. autoConnect=true alone is too lazy
-                    // for field reality (Doze + long out-of-range absences
-                    // routinely take minutes to re-acquire). The watchdog
-                    // forces a fresh `connectGatt` every RECONNECT_INTERVAL_MS
-                    // which resets Android's scan timer and gives a
-                    // deterministic recovery window once the peer is back
-                    // in range. Cancelled after notification subscription succeeds.
+                    // Keep retrying across range loss until notification setup
+                    // succeeds again, including failed GATT registrations.
                     armReconnectWatchdog()
                 }
             }
@@ -362,9 +365,12 @@ public class PersistentGattClient internal constructor(
                 Log.w(PERSISTENT_GATT_LOG_TAG, "setCharacteristicNotification false")
                 return
             }
-            cccd.value = CCCD_ENABLE_NOTIFY
+            // BlueZ can retain an enabled CCCD with a dead notification writer
+            // across range loss. Reset it before requesting a fresh subscription.
+            subscriptionPhase.set(SubscriptionPhase.RESETTING)
+            cccd.value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
             val ok = runCatching { g.writeDescriptor(cccd) }.getOrDefault(false)
-            Log.i(PERSISTENT_GATT_LOG_TAG, "subscribed: writeDescriptor=$ok")
+            Log.i(PERSISTENT_GATT_LOG_TAG, "reset subscription: writeDescriptor=$ok")
         }
 
         @Deprecated("Pre-API-33 onCharacteristicChanged; we honor both forms.")
@@ -400,8 +406,20 @@ public class PersistentGattClient internal constructor(
             if (descriptor.uuid == CCCD_UUID && descriptor.characteristic.uuid == SYAUTH_CHALLENGE_CHAR_UUID
                 && status == BluetoothGatt.GATT_SUCCESS
             ) {
-                reconnectHandler.removeCallbacks(reconnectRunnable)
-                Log.i(PERSISTENT_GATT_LOG_TAG, "challenge notification subscription ready")
+                when (subscriptionPhase.get()) {
+                    SubscriptionPhase.RESETTING -> {
+                        subscriptionPhase.set(SubscriptionPhase.ENABLING)
+                        descriptor.value = CCCD_ENABLE_NOTIFY
+                        val ok = runCatching { g.writeDescriptor(descriptor) }.getOrDefault(false)
+                        Log.i(PERSISTENT_GATT_LOG_TAG, "enable subscription: writeDescriptor=$ok")
+                    }
+                    SubscriptionPhase.ENABLING -> {
+                        subscriptionPhase.set(SubscriptionPhase.READY)
+                        reconnectHandler.removeCallbacks(reconnectRunnable)
+                        Log.i(PERSISTENT_GATT_LOG_TAG, "challenge notification subscription ready")
+                    }
+                    else -> Unit
+                }
             }
         }
     }
@@ -431,12 +449,8 @@ public class PersistentGattClient internal constructor(
         /**
          * Watchdog cadence (milliseconds) for re-issuing a fresh
          * `connectGatt` while connection or notification setup is incomplete.
-         * 15 s is short enough that the user's first sudo after
-         * returning into range usually finds the link already
-         * recovered, and long enough that we do not thrash the BLE
-         * stack while the peer is genuinely absent (each fresh
-         * `connectGatt` triggers a scan window which has a small but
-         * non-zero radio cost).
+         * Healthy subscriptions stop this timer. Failed opens keep it active
+         * so recovery does not depend on a missing connection callback.
          */
         internal const val RECONNECT_INTERVAL_MS: Long = 15_000L
 

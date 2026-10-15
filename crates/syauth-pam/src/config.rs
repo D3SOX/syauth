@@ -15,6 +15,8 @@
 //!   (SPEC §3 scope item #12).
 //! - [`Config::on_empty_password`] waits for a submission before contacting
 //!   the daemon. Nonempty passwords remain cached for the password module.
+//! - [`Config::terminal_prompt`] lets foreground terminal users submit a
+//!   password while phone approval is pending.
 //!
 //! The legacy S-009 `mock_peer_enabled`, `adapter_id`, and
 //! `response_timeout` knobs are gone — `pam_sm_authenticate` no longer
@@ -72,6 +74,10 @@ pub const PAM_SOCKET_ARG_PREFIX: &str = "socket=";
 /// (`Config::default().with_bond_dir(...)`).
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Race terminal password entry against phone approval. Opt-in for sudo.
+    pub terminal_prompt: bool,
+    /// Display asterisks for terminal input. Opt-in to match sudo pwfeedback.
+    pub pwfeedback: bool,
     /// Wait for a password submission; only an empty response requests the phone.
     pub on_empty_password: bool,
     /// Directory holding `bonds.toml` and `last.log`.
@@ -88,6 +94,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            terminal_prompt: false,
+            pwfeedback: false,
             on_empty_password: false,
             bond_dir: PathBuf::from(DEFAULT_BOND_DIR),
             socket_path: Self::resolve_socket_path(None),
@@ -98,7 +106,7 @@ impl Default for Config {
 
 impl Config {
     /// Parse the libpam `argv` for the documented arguments (currently
-    /// `socket=<path>` and `on_empty_password`) and assemble a `Config`. Unknown
+    /// `socket=<path>`, `on_empty_password`, `terminal_prompt`, `pwfeedback`) and assemble a `Config`. Unknown
     /// arguments are silently ignored — libpam stacks frequently
     /// carry arguments destined for other modules and rejecting them
     /// would break composition.
@@ -109,6 +117,8 @@ impl Config {
             .find_map(|arg| arg.strip_prefix(PAM_SOCKET_ARG_PREFIX))
             .map(PathBuf::from);
         Self {
+            terminal_prompt: argv.contains(&"terminal_prompt"),
+            pwfeedback: argv.contains(&"pwfeedback"),
             on_empty_password: argv.contains(&"on_empty_password"),
             bond_dir: PathBuf::from(DEFAULT_BOND_DIR),
             socket_path: Self::resolve_socket_path(socket_override),
@@ -146,6 +156,8 @@ impl Config {
     #[must_use]
     pub fn for_tests(bond_dir: &Path) -> Self {
         Self {
+            terminal_prompt: false,
+            pwfeedback: false,
             on_empty_password: false,
             bond_dir: bond_dir.to_path_buf(),
             socket_path: bond_dir.join(DEFAULT_SOCKET_BASENAME),
@@ -195,6 +207,20 @@ mod tests {
     // Journey: specs/journeys/JOURNEY-S-008-pam-unix-socket-client.md
 
     use super::*;
+
+    #[test]
+    fn terminal_prompt_is_explicitly_opt_in() {
+        assert!(!Config::default().terminal_prompt);
+        assert!(!Config::from_pam_argv(&["terminal_prompt=false"]).terminal_prompt);
+        assert!(Config::from_pam_argv(&["terminal_prompt"]).terminal_prompt);
+    }
+
+    #[test]
+    fn masked_terminal_feedback_is_explicitly_opt_in() {
+        assert!(!Config::default().pwfeedback);
+        assert!(!Config::from_pam_argv(&["pwfeedback=false"]).pwfeedback);
+        assert!(Config::from_pam_argv(&["terminal_prompt", "pwfeedback"]).pwfeedback);
+    }
 
     #[test]
     fn empty_password_mode_requires_the_exact_option() {

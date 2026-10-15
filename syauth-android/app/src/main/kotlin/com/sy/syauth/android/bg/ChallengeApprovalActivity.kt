@@ -335,17 +335,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
             lastShowWhenLockedFlag = true
             lastTurnScreenOnFlag = true
         }
-        val peerId = intent?.getStringExtra(EXTRA_PEER_ID).orEmpty()
-        val hostname = intent?.getStringExtra(EXTRA_HOSTNAME).orEmpty()
-        if (peerId.isEmpty() || hostname.isEmpty()) {
-            Log.w(APPROVAL_LOG_TAG, "missing extras peer='$peerId' host='$hostname'; finishing")
-            finish()
-            return
-        }
-        resolvedPeerId = peerId
-        resolvedHostname = hostname
-        resolvedChallenge = intent?.getByteArrayExtra(EXTRA_CHALLENGE_BYTES) ?: ByteArray(0)
-        resolvedKeystoreAlias = intent?.getStringExtra(EXTRA_KEYSTORE_ALIAS).orEmpty()
+        if (!readRequest(intent)) { finish(); return }
         lifecycleScope.launch {
             SyauthCompanionService.cancelledApproval.collect { cancelled ->
                 if (cancelled != null && cancelled.first == resolvedPeerId &&
@@ -357,10 +347,54 @@ public class ChallengeApprovalActivity : FragmentActivity() {
                 }
             }
         }
-        val short = shortPeerId(peerId)
-        val promptText = "$hostname is requesting sudo (peer_id $short)"
+        if (!terminal) renderRequest()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val previousPeer = resolvedPeerId
+        val previousChallenge = resolvedChallenge
+        setIntent(intent)
+        if (!readRequest(intent)) { onCancelClicked(); return }
+        if (previousPeer == resolvedPeerId && previousChallenge.contentEquals(resolvedChallenge)) return
+        // Invalidate the old operation before cancelling it; its callback may run immediately.
+        activeGate?.cancel()
+        activeGate = null
+        terminal = false
+        autoPromptStarted = false
+        val cancelled = SyauthCompanionService.cancelledApproval.value
+        if (cancelled?.first == resolvedPeerId && resolvedChallenge.size >= CHALLENGE_HEADER_BYTES &&
+            cancelled.second.contentEquals(resolvedChallenge.copyOfRange(1, CHALLENGE_HEADER_BYTES))) {
+            terminal = true
+            finish()
+            return
+        }
+        renderRequest()
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+            autoPromptStarted = true
+            startAuthentication()
+        }
+    }
+
+    private fun readRequest(request: Intent?): Boolean {
+        val peerId = request?.getStringExtra(EXTRA_PEER_ID).orEmpty()
+        val hostname = request?.getStringExtra(EXTRA_HOSTNAME).orEmpty()
+        if (peerId.isEmpty() || hostname.isEmpty()) {
+            Log.w(APPROVAL_LOG_TAG, "missing extras peer='$peerId' host='$hostname'; finishing")
+            return false
+        }
+        resolvedPeerId = peerId
+        resolvedHostname = hostname
+        resolvedChallenge = request?.getByteArrayExtra(EXTRA_CHALLENGE_BYTES) ?: ByteArray(0)
+        resolvedKeystoreAlias = request?.getStringExtra(EXTRA_KEYSTORE_ALIAS).orEmpty()
+        return true
+    }
+
+    private fun renderRequest() {
+        val short = shortPeerId(resolvedPeerId)
+        val promptText = "$resolvedHostname is requesting sudo (peer_id $short)"
         lastPromptText = promptText
-        Log.i(APPROVAL_LOG_TAG, "render peer=$peerId host=$hostname")
+        Log.i(APPROVAL_LOG_TAG, "render peer=$resolvedPeerId host=$resolvedHostname")
         setContent { ApprovalContent(promptText = promptText, onAuthorize = ::startAuthentication, onCancel = ::onCancelClicked) }
     }
 
@@ -399,6 +433,8 @@ public class ChallengeApprovalActivity : FragmentActivity() {
             hostname = resolvedHostname,
         )
         activeGate = gate
+        val expectedPeer = resolvedPeerId
+        val expectedChallenge = resolvedChallenge.copyOf()
         gate.authenticate(
             resolvedKeystoreAlias,
             resolvedChallenge,
@@ -406,20 +442,20 @@ public class ChallengeApprovalActivity : FragmentActivity() {
                 private var completed = false
 
                 override fun onDismissed() {
-                    if (completed) return
+                    if (completed || expectedPeer != resolvedPeerId || !expectedChallenge.contentEquals(resolvedChallenge)) return
                     completed = true
                     if (!terminal) activeGate = null
                 }
 
                 override fun onSucceeded(signatureBytes: ByteArray) {
-                    if (completed) return
+                    if (completed || expectedPeer != resolvedPeerId || !expectedChallenge.contentEquals(resolvedChallenge)) return
                     completed = true
                     Log.i(APPROVAL_LOG_TAG, "approve sig ok peer=$resolvedPeerId len=${signatureBytes.size}")
                     writeResponseAndFinish(signatureBytes)
                 }
 
                 override fun onFailed(reason: String) {
-                    if (completed) return
+                    if (completed || expectedPeer != resolvedPeerId || !expectedChallenge.contentEquals(resolvedChallenge)) return
                     completed = true
                     Log.i(APPROVAL_LOG_TAG, "approve fail peer=$resolvedPeerId reason=$reason")
                     writeResponseAndFinish(DENIED_FRAME_BYTES)
@@ -429,7 +465,7 @@ public class ChallengeApprovalActivity : FragmentActivity() {
     }
 
     private fun writeResponseAndFinish(responseBytes: ByteArray) {
-        if (terminal) return
+        if (terminal || isFinishing || isDestroyed) return
         terminal = true
         responseSink?.onResponse(resolvedPeerId, responseBytes)
         if (!isFinishing) {

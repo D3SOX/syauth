@@ -199,6 +199,8 @@ impl From<TransportError> for PeripheralError {
 /// method.
 #[async_trait]
 pub trait Peripheral: Send + Sync {
+    /// Whether the peer has a live subscription able to receive challenges.
+    async fn is_connected(&self, peer_id: &str) -> bool;
     /// Register a bonded peer's challenge + response characteristics
     /// with the long-lived GATT application.
     ///
@@ -910,6 +912,12 @@ impl PersistentPeripheral {
 
 #[async_trait]
 impl Peripheral for PersistentPeripheral {
+    async fn is_connected(&self, peer_id: &str) -> bool {
+        let peers = self.peers.lock().await;
+        let Some(peer) = peers.get(peer_id) else { return false };
+        let slot = peer.notifier_slot.lock().await;
+        slot.as_ref().is_some_and(|writer| writer.is_closed().is_ok_and(|closed| !closed))
+    }
     async fn add_peer(&self, peer_id: &str, bond_key: &BondKey) -> Result<(), PeripheralError> {
         let peers = self.peers.lock().await;
         if peers.contains_key(peer_id) {
@@ -1079,6 +1087,7 @@ struct FakeState {
     /// Every `notify_challenge` argument, recorded in call order, so
     /// later daemon tests (S-006) can assert on the sequence.
     notify_calls: Vec<(String, Vec<u8>)>,
+    connected: std::collections::HashSet<String>,
     /// Per-peer FIFO of queued response bytes. `inject_response`
     /// pushes onto the back; `wait_for_response` pops from the
     /// front. An empty FIFO when `wait_for_response` is called
@@ -1103,6 +1112,15 @@ pub struct FakePeripheral {
 
 #[cfg(any(test, feature = "test-fake"))]
 impl FakePeripheral {
+    /// Simulate subscription and disconnection without transmitting a challenge.
+    pub fn set_connected(&self, peer_id: &str, connected: bool) {
+        let mut state = self.lock_state();
+        if connected {
+            state.connected.insert(peer_id.to_owned());
+        } else {
+            state.connected.remove(peer_id);
+        }
+    }
     /// Construct a fresh `FakePeripheral` with no peers, no advertised
     /// UUIDs, and no recorded calls.
     #[must_use]
@@ -1181,6 +1199,10 @@ impl Default for FakePeripheral {
 #[cfg(any(test, feature = "test-fake"))]
 #[async_trait]
 impl Peripheral for FakePeripheral {
+    async fn is_connected(&self, peer_id: &str) -> bool {
+        let state = self.lock_state();
+        state.peer_keys.contains_key(peer_id) && state.connected.contains(peer_id)
+    }
     async fn add_peer(&self, peer_id: &str, bond_key: &BondKey) -> Result<(), PeripheralError> {
         let mut state = self.lock_state();
         if state.peer_keys.contains_key(peer_id) {
@@ -1195,6 +1217,7 @@ impl Peripheral for FakePeripheral {
 
     async fn remove_peer(&self, peer_id: &str) -> Result<(), PeripheralError> {
         let mut state = self.lock_state();
+        state.connected.remove(peer_id);
         if state.peer_keys.remove(peer_id).is_none() {
             return Err(PeripheralError::UnknownPeer {
                 peer_id: peer_id.to_owned(),

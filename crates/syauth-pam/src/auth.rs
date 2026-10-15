@@ -104,13 +104,15 @@ pub const REASON_NO_BONDED_PEER: &str = "no bonded peer";
 // AuthOutcome — the verdict the C-extern boundary maps to PAM return codes.
 // =============================================================================
 
-/// One of three verdicts the C-extern boundary translates to a PAM
+/// An authentication verdict the C-extern boundary translates to a PAM
 /// return code. Each `AuthErr` / `AuthInfoUnavail` variant carries a
 /// short kebab-token `reason` that ends up in both the syslog line
 /// and the `last.log` audit. The reasons are pinned by the unit
 /// tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthOutcome {
+    /// A password was cached for the next module; no authentication granted.
+    PasswordSubmitted,
     /// Authentication succeeded — the daemon returned
     /// `Response::Challenge { ok: true, reason: "ok" }`. Maps to
     /// `PAM_SUCCESS`.
@@ -148,6 +150,7 @@ impl AuthOutcome {
     #[must_use]
     pub fn to_pam_code(&self) -> std::ffi::c_int {
         match self {
+            Self::PasswordSubmitted => crate::entry::PAM_IGNORE,
             Self::Success { .. } => PAM_SUCCESS,
             Self::AuthInfoUnavail { .. } => PAM_AUTHINFO_UNAVAIL,
             Self::AuthErr { .. } => PAM_AUTH_ERR,
@@ -158,6 +161,7 @@ impl AuthOutcome {
     #[must_use]
     pub fn reason(&self) -> &'static str {
         match self {
+            Self::PasswordSubmitted => "password-submitted",
             Self::Success { .. } => "granted",
             Self::AuthInfoUnavail { reason, .. } | Self::AuthErr { reason, .. } => reason,
         }
@@ -168,6 +172,7 @@ impl AuthOutcome {
     #[must_use]
     pub fn peer_id(&self) -> Option<&str> {
         match self {
+            Self::PasswordSubmitted => None,
             Self::Success { peer_id } => Some(peer_id.as_str()),
             Self::AuthInfoUnavail { peer_id, .. } | Self::AuthErr { peer_id, .. } => peer_id.as_deref(),
         }
@@ -228,7 +233,7 @@ pub fn outcome_reason_to_pam(reason: &str) -> (std::ffi::c_int, &'static str) {
 /// call.
 #[must_use]
 pub fn authenticate(cfg: &Config) -> AuthOutcome {
-    let outcome = authenticate_inner(cfg);
+    let outcome = authenticate_inner(cfg, daemon_round_trip);
     // Best-effort audit log; failure here does not change the PAM
     // code (SPEC §6 audit is a forensic surface, not a control flow
     // surface).
@@ -236,7 +241,10 @@ pub fn authenticate(cfg: &Config) -> AuthOutcome {
     outcome
 }
 
-fn authenticate_inner(cfg: &Config) -> AuthOutcome {
+pub(crate) fn authenticate_inner(
+    cfg: &Config,
+    exchange: impl FnOnce(&Path, &str, &[u8; NONCE_LEN], Duration) -> Result<Response, AuthOutcome>,
+) -> AuthOutcome {
     // -- step 1: load the bond store to pick a peer_id ------------------
     let peer_id = match resolve_peer_id(cfg) {
         Ok(id) => id,
@@ -253,20 +261,9 @@ fn authenticate_inner(cfg: &Config) -> AuthOutcome {
     }
 
     // -- step 3: daemon round-trip --------------------------------------
-    let response = match daemon_round_trip(&cfg.socket_path, &peer_id, &nonce, cfg.auth_timeout) {
+    let response = match exchange(&cfg.socket_path, &peer_id, &nonce, cfg.auth_timeout) {
         Ok(r) => r,
-        Err(()) => {
-            // Connect-refused / socket missing / write fail / read
-            // timeout / decode error all collapse to a single
-            // `transport-error` reason. The unit test
-            // `authenticate_falls_through_when_daemon_socket_missing`
-            // asserts wall-clock ≤ 50 ms for the connect-refused
-            // path.
-            return AuthOutcome::AuthInfoUnavail {
-                reason: OUTCOME_REASON_TRANSPORT_ERROR,
-                peer_id: Some(peer_id),
-            };
-        }
+        Err(outcome) => return outcome,
     };
 
     // -- step 4: map response.reason to PAM code -----------------------
@@ -351,7 +348,14 @@ fn getrandom_fill(buf: &mut [u8]) -> Result<(), ()> {
 /// Open the daemon's Unix socket, write one `Request::Challenge`,
 /// read one `Response`. Returns `Err(())` on any failure — the
 /// caller maps that to `OUTCOME_REASON_TRANSPORT_ERROR`.
-fn daemon_round_trip(socket_path: &Path, peer_id: &str, nonce: &[u8; NONCE_LEN], auth_timeout: Duration) -> Result<Response, ()> {
+fn daemon_round_trip(socket_path: &Path, peer_id: &str, nonce: &[u8; NONCE_LEN], auth_timeout: Duration) -> Result<Response, AuthOutcome> {
+    exchange_daemon(socket_path, peer_id, nonce, auth_timeout).map_err(|()| AuthOutcome::AuthInfoUnavail {
+        reason: OUTCOME_REASON_TRANSPORT_ERROR,
+        peer_id: Some(peer_id.to_owned()),
+    })
+}
+
+fn exchange_daemon(socket_path: &Path, peer_id: &str, nonce: &[u8; NONCE_LEN], auth_timeout: Duration) -> Result<Response, ()> {
     let mut stream = match UnixStream::connect_addr_from_path(socket_path) {
         Ok(s) => s,
         Err(_) => return Err(()),
@@ -408,7 +412,7 @@ impl UnixStreamConnectExt for UnixStream {
 // last.log writer
 // -----------------------------------------------------------------------------
 
-fn append_last_log(cfg: &Config, outcome: &AuthOutcome) -> std::io::Result<()> {
+pub(crate) fn append_last_log(cfg: &Config, outcome: &AuthOutcome) -> std::io::Result<()> {
     let now = OffsetDateTime::now_utc();
     let ts = now.format(&Rfc3339).unwrap_or_else(|_| String::from("0000-00-00T00:00:00Z"));
     let verb = if outcome.is_success() {

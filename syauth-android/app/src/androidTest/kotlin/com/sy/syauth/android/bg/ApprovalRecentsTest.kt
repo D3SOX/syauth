@@ -3,6 +3,7 @@ package com.sy.syauth.android.bg
 import android.accessibilityservice.AccessibilityService
 import android.app.ActivityManager
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -53,7 +54,11 @@ class ApprovalRecentsTest {
                         }
                     } else {
                         requireNotNull(tasks.findTask(taskId)).moveToFront()
-                        scenario.moveToState(Lifecycle.State.RESUMED)
+                        val resumedDeadline = SystemClock.uptimeMillis() + TASK_REMOVAL_TIMEOUT_MILLIS
+                        while (scenario.state != Lifecycle.State.RESUMED && SystemClock.uptimeMillis() < resumedDeadline) {
+                            Thread.sleep(TASK_POLL_INTERVAL_MILLIS)
+                        }
+                        assertEquals("reopened request resumes", Lifecycle.State.RESUMED, scenario.state)
                         scenario.onActivity { activity ->
                             activity.startAuthentication()
                             when (outcome) {
@@ -78,10 +83,12 @@ class ApprovalRecentsTest {
     }
 
     // Android can remove a task between listing it and reading its taskInfo.
+    @Suppress("DEPRECATION")
     private fun ActivityManager.findTask(taskId: Int): ActivityManager.AppTask? =
         appTasks.firstOrNull { task ->
             try {
-                task.taskInfo.taskId == taskId
+                val info = task.taskInfo
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) info.taskId else info.id) == taskId
             } catch (_: IllegalArgumentException) {
                 false
             }

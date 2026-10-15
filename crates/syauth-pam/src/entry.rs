@@ -174,6 +174,20 @@ pub unsafe extern "C" fn pam_sm_authenticate(pamh: *mut c_void, _flags: c_int, a
         let argv_strings = unsafe { collect_pam_argv(argc, argv) };
         let argv_refs: Vec<&str> = argv_strings.iter().map(String::as_str).collect();
         let cfg = Config::from_pam_argv(&argv_refs);
+        if cfg.terminal_prompt {
+            if cfg.on_empty_password {
+                log_info("syauth: unlock denied reason=conflicting-prompt-options");
+                return PAM_AUTH_ERR;
+            }
+            // SAFETY: isatty only inspects the standard input descriptor.
+            let terminal_input = unsafe { libc::isatty(libc::STDIN_FILENO) } != 0;
+            // Sudo sets PAM_SILENT during ordinary interactive authentication;
+            // that flag does not identify redirected password input.
+            if !terminal_input {
+                log_info("syauth: unlock skipped reason=redirected-input");
+                return PAM_IGNORE;
+            }
+        }
         if cfg.on_empty_password {
             // SAFETY: libpam owns this live handle throughout the entry point.
             // The helper checks null and never retains a PAM-owned token.
@@ -186,7 +200,13 @@ pub unsafe extern "C" fn pam_sm_authenticate(pamh: *mut c_void, _flags: c_int, a
                 return code;
             }
         }
-        let outcome = auth::authenticate(&cfg);
+        let outcome = if cfg.terminal_prompt {
+            // SAFETY: libpam owns this handle for the entire entry point. No
+            // worker thread or callback retains it beyond this synchronous call.
+            unsafe { crate::terminal::authenticate(&cfg, pamh.cast()) }
+        } else {
+            auth::authenticate(&cfg)
+        };
         log_info(&format!(
             "syauth: unlock {} reason={} peer_id={}",
             if outcome.is_success() { "success" } else { "denied" },

@@ -193,6 +193,11 @@ fn default_mode_does_not_ask_for_a_password() {
 }
 
 #[test]
+fn conflicting_interactive_modes_fail_without_prompting() {
+    assert_eq!(authenticate(Some(7), "on_empty_password terminal_prompt", "", vec![]), (0, 0));
+}
+
+#[test]
 fn authentication_waits_for_an_actual_submission() {
     let (ready_tx, ready_rx) = mpsc::channel();
     let (reply_tx, reply_rx) = mpsc::channel();

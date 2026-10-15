@@ -6,6 +6,12 @@ observes EOF on that worker's RPC socket, dismisses the matching phone request,
 and releases the per-peer challenge slot. Deadline expiry also dismisses an
 unanswered request.
 
+With sudo's `terminal_prompt`, submitting a password also closes the outstanding
+PAM socket. This withdraws the phone request before the password module verifies
+the submitted token. An incorrect password therefore ends that phone request too.
+Cancellation delivery has a bounded wait; a broken Bluetooth link can leave a
+stale phone dialog but cannot restore the closed desktop request.
+
 The existing v1 frame format remains `[version:1][nonce:16][payload:N][tag:16]`.
 An empty payload requests approval. ASCII `cancel` dismisses the request with
 the same nonce. The cancellation carries the same bond-key BLAKE3 MAC as the
