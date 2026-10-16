@@ -102,6 +102,43 @@ Neither check reopened the phone app or manually connected the devices.
 This tests peer availability without a radio restart; it does not measure a
 walk out of physical radio range or hours of phone idle time.
 
+## Recovery after laptop suspend
+
+The daemon selects BlueZ's current default adapter at startup. A USB controller
+can return with a different index after suspend, such as `hci1` instead of
+`hci0`. Removing the active adapter or losing its advertising registration now
+makes the daemon exit with an error. The systemd user service retries after two
+seconds and rebuilds the GATT services and advertisements from the saved bonds.
+If no adapter is available yet, startup fails and systemd keeps retrying.
+
+Inspect recovery with:
+
+```sh
+journalctl --user -u syauth-presenced --since '5 minutes ago' --no-pager
+syauth status --json
+```
+
+Look for `Bluetooth session lost; restarting peripheral`, followed by
+`opening Bluetooth peripheral` with the current adapter name. The peer's
+`connected` field becomes `true` once the phone subscribes again. Radio discovery
+can take longer than the service's restart delay. If the CLI reports the old
+adapter as missing, pass the current name, for example `syauth status --adapter
+hci1 --json`.
+
+On 2026-10-16, the laptop had resumed with only `hci1` present. The old daemon
+was still running against the removed `hci0` and had failed every advertising
+refresh for more than 30 minutes. After installing this fix, it selected `hci1`
+and the Pixel subscribed in about four seconds, without reopening the phone app.
+The adapter-removal and restart sequence is covered by the private D-Bus tests;
+the physical laptop was not suspended again during this check.
+
+The regression suite uses a private D-Bus peer, without a radio. It covers an
+`hci1`-only startup, removal of `hci0` followed by `hci1`, an adapter missing at
+startup, and a failed advertising registration. Run it with
+`cargo test -p syauth-presenced --test bluetooth_recovery`. These tests require
+`dbus-daemon`, Python's `dbus` module, and PyGObject; they skip if those tools are
+missing.
+
 ## Emulator transport test
 
 The transport test passed on Android 15/API 35 with Emulator 37.1.11. A

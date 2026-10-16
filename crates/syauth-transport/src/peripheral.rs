@@ -50,7 +50,7 @@ use futures::{FutureExt, StreamExt};
 use thiserror::Error;
 use tokio::{
     io::AsyncReadExt,
-    sync::{Mutex, mpsc},
+    sync::{Mutex, Notify, mpsc},
     task::JoinHandle,
 };
 
@@ -350,6 +350,8 @@ pub struct PersistentPeripheral {
     pair_watcher: Mutex<Option<JoinHandle<()>>>,
     /// Per-peer characteristic state. Keyed by stable peer_id.
     peers: Mutex<HashMap<String, PeerCharSet>>,
+    /// Wakes the runtime when BlueZ rejects an advertisement registration.
+    registration_failed: Notify,
 }
 
 impl PersistentPeripheral {
@@ -367,12 +369,33 @@ impl PersistentPeripheral {
     pub async fn new(
         adapter_id: &str,
     ) -> Result<(Arc<Self>, mpsc::Receiver<([u8; PAIR_PUBKEY_LEN], [u8; PAIR_PUBKEY_LEN])>), PeripheralError> {
-        let session = bluer::Session::new()
-            .await
-            .map_err(|err| PeripheralError::from(map_adapter_open_error(adapter_id, err)))?;
-        let adapter = session
-            .adapter(adapter_id)
-            .map_err(|err| PeripheralError::from(map_adapter_open_error(adapter_id, err)))?;
+        Self::open(Some(adapter_id)).await
+    }
+
+    /// Open the current default adapter, including when resume has changed its
+    /// controller index from `hci0` to another name.
+    ///
+    /// # Errors
+    /// Returns a backend error if BlueZ, an adapter, or its registrations are unavailable.
+    pub async fn new_default() -> Result<(Arc<Self>, mpsc::Receiver<([u8; PAIR_PUBKEY_LEN], [u8; PAIR_PUBKEY_LEN])>), PeripheralError> {
+        Self::open(None).await
+    }
+
+    async fn open(
+        adapter_id: Option<&str>,
+    ) -> Result<(Arc<Self>, mpsc::Receiver<([u8; PAIR_PUBKEY_LEN], [u8; PAIR_PUBKEY_LEN])>), PeripheralError> {
+        let session = bluer::Session::new().await.map_err(|err| PeripheralError::Backend {
+            reason: format!("open BlueZ session: {err}"),
+        })?;
+        let adapter = match adapter_id {
+            Some(name) => session
+                .adapter(name)
+                .map_err(|err| PeripheralError::from(map_adapter_open_error(name, err)))?,
+            None => session.default_adapter().await.map_err(|err| PeripheralError::Backend {
+                reason: format!("select default adapter: {err}"),
+            })?,
+        };
+        tracing::info!(adapter = adapter.name(), "opening Bluetooth peripheral");
         adapter.set_powered(true).await.map_err(|err| PeripheralError::Backend {
             reason: format!("adapter set_powered: {err}"),
         })?;
@@ -428,6 +451,7 @@ impl PersistentPeripheral {
             pair_event_tx,
             pair_watcher: Mutex::new(None),
             peers: Mutex::new(HashMap::new()),
+            registration_failed: Notify::new(),
         });
         // Register an initial GATT application that contains only the
         // pair-mode service. Without this a fresh-install daemon (no
@@ -639,6 +663,24 @@ impl PersistentPeripheral {
         });
         *self.pair_watcher.lock().await = Some(task);
         Ok(())
+    }
+
+    /// Wait until the adapter disappears or an advertisement registration fails.
+    /// The runtime then exits for systemd to rebuild the entire BlueZ session.
+    pub async fn wait_for_failure(&self) -> PeripheralError {
+        let lost = async {
+            let events = self.adapter.events().await?;
+            // Check after subscribing so removal during setup is not missed.
+            self.adapter.address().await?;
+            futures::pin_mut!(events);
+            while events.next().await.is_some() {}
+            Ok::<(), bluer::Error>(())
+        };
+        let reason = tokio::select! {
+            result = lost => format!("adapter {} lost: {result:?}", self.adapter.name()),
+            _ = self.registration_failed.notified() => "advertisement registration lost".to_owned(),
+        };
+        PeripheralError::Backend { reason }
     }
 
     /// Helper: build a `bluer` advertisement object from a UUID set.
@@ -969,13 +1011,12 @@ impl Peripheral for PersistentPeripheral {
         // observer never sees both UUID sets simultaneously.
         slot.take();
         let advertisement = Self::build_advertisement(uuids);
-        let handle = self
-            .adapter
-            .advertise(advertisement)
-            .await
-            .map_err(|err| PeripheralError::Backend {
+        let handle = self.adapter.advertise(advertisement).await.map_err(|err| {
+            self.registration_failed.notify_one();
+            PeripheralError::Backend {
                 reason: format!("advertise: {err}"),
-            })?;
+            }
+        })?;
         *slot = Some(handle);
         Ok(())
     }

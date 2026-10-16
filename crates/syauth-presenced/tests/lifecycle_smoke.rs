@@ -117,6 +117,7 @@ impl TestEnv {
     fn spawn_daemon(&self) -> Child {
         let bin = daemon_bin_path();
         Command::new(&bin)
+            .arg("--peripheral=fake")
             .arg("--socket")
             .arg(&self.socket)
             .arg("--bonds-file")

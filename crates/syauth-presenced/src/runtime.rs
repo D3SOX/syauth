@@ -15,7 +15,7 @@ use std::{
 };
 
 use syauth_core::{Bond, BondStatus, BondStore, bond_key_from_pubkeys, peer_id_from_pubkey};
-use syauth_transport::{BOND_KEY_BYTES, DEFAULT_ADAPTER_NAME, FakePeripheral, Peripheral, PersistentPeripheral};
+use syauth_transport::{BOND_KEY_BYTES, FakePeripheral, Peripheral, PeripheralError, PersistentPeripheral};
 use tokio::{
     signal::unix::{SignalKind, signal},
     sync::mpsc,
@@ -79,6 +79,9 @@ pub enum RunError {
     /// failed (S-002 `ServeError`).
     #[error(transparent)]
     Serve(#[from] ServeError),
+    /// Bluetooth registrations were lost; systemd must recreate the session.
+    #[error("Bluetooth peripheral unavailable: {0}")]
+    Peripheral(#[from] PeripheralError),
 }
 
 /// Reason the daemon's main loop exited. Useful for tests that want
@@ -214,7 +217,8 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
     );
 
     let (orch_shutdown_tx, orch_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let (orch_task, reload_tx, orch_handle) = maybe_spawn_orchestrator(&config, orch_shutdown_rx).await;
+    let (failure_tx, mut failure_rx) = mpsc::channel(1);
+    let (orch_task, reload_tx, orch_handle) = maybe_spawn_orchestrator(&config, orch_shutdown_rx, failure_tx).await;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let serve_config = ServeConfig {
@@ -234,8 +238,14 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
 
     let inotify_task = reload_tx.as_ref().map(|tx| spawn_inotify_watcher(&config.bonds_file, tx.clone()));
 
-    let reason = wait_for_reason(&mut sigterm, &mut sigint, &mut sighup, reload_tx.as_ref()).await;
-    tracing::info!(?reason, "shutdown signal received, draining");
+    let reason = tokio::select! {
+        reason = wait_for_reason(&mut sigterm, &mut sigint, &mut sighup, reload_tx.as_ref()) => Ok(reason),
+        Some(error) = failure_rx.recv() => {
+            tracing::warn!(error = %error, "Bluetooth session lost; restarting peripheral");
+            Err(RunError::Peripheral(error))
+        }
+    };
+    tracing::info!(?reason, "draining daemon tasks");
     let _ = shutdown_tx.send(());
     let _ = orch_shutdown_tx.send(());
     if let Some(handle) = orch_task {
@@ -260,7 +270,7 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
     // F_OFD_SETLK lock and the pidfile is unlinked on the way out.
     drop(lock);
     tracing::info!("syauth-presenced stopped cleanly");
-    Ok(reason)
+    reason
 }
 
 async fn wait_for_reason(
@@ -287,27 +297,14 @@ async fn wait_for_reason(
     }
 }
 
-/// Try to construct an [`Orchestrator`] over a [`PersistentPeripheral`]
-/// and spawn it. Returns `(None, None)` (and logs a `warn`) if no
-/// non-revoked bond exists, the key file is missing or malformed, or
-/// the BlueZ adapter cannot be opened — in any of those cases the
-/// daemon stays up with only the S-002 Unix-socket loop.
-///
-/// On success the orchestrator is constructed over the cold-start
-/// peer (a single bond for now; multi-peer hydration on cold start
-/// is built on top of this single-bond seed by the reload pipeline
-/// re-reading `bonds.toml` on the first SIGHUP or inotify event after
-/// startup). The returned `mpsc::Sender<ReloadCommand>` clone is
-/// wired into `ServeConfig::reload_tx` and the SIGHUP / inotify
-/// dispatchers.
-///
-/// This split keeps the S-001 `lifecycle_smoke` tests green: those
-/// tests run with a non-existent `bonds.toml`, which `BondStore::load`
-/// renders as an empty store, which routes through the `warn`
-/// short-circuit before any BlueZ DBus call is made.
+/// Construct the peripheral and hydrate the orchestrator from the bond store.
+/// Bluetooth setup errors and registration loss are sent to the runtime so
+/// systemd retries with a fresh session instead of leaving a socket-only daemon.
+/// Invalid bond files still leave the RPC server available for diagnostics.
 async fn maybe_spawn_orchestrator(
     config: &Config,
     shutdown: tokio::sync::oneshot::Receiver<()>,
+    failure_tx: mpsc::Sender<PeripheralError>,
 ) -> (
     Option<tokio::task::JoinHandle<()>>,
     Option<mpsc::Sender<ReloadCommand>>,
@@ -329,10 +326,17 @@ async fn maybe_spawn_orchestrator(
     // spin up on the next reload.
     type PairEventRx = tokio::sync::mpsc::Receiver<([u8; 32], [u8; 32])>;
     let (peripheral, pair_events): (Arc<dyn Peripheral + Send + Sync>, Option<PairEventRx>) = match config.peripheral_mode {
-        PeripheralMode::Real => match PersistentPeripheral::new(DEFAULT_ADAPTER_NAME).await {
-            Ok((p, rx)) => (p, Some(rx)),
+        PeripheralMode::Real => match PersistentPeripheral::new_default().await {
+            Ok((p, rx)) => {
+                let watched = Arc::clone(&p);
+                let watch_tx = failure_tx.clone();
+                tokio::spawn(async move {
+                    let _ = watch_tx.send(watched.wait_for_failure().await).await;
+                });
+                (p, Some(rx))
+            }
             Err(err) => {
-                warn_no_orchestrator(&format!("BlueZ adapter open failed: {err}"));
+                let _ = failure_tx.send(err).await;
                 return (None, None, None);
             }
         },
@@ -348,7 +352,7 @@ async fn maybe_spawn_orchestrator(
         match load_bond_key(&config.keys_dir, &b.peer_id) {
             Ok(k) => {
                 if let Err(err) = peripheral.add_peer(&b.peer_id, &k).await {
-                    warn_no_orchestrator(&format!("peripheral add_peer failed: {err}"));
+                    let _ = failure_tx.send(err).await;
                     return (None, None, None);
                 }
                 seed_peers.push((b, k));
