@@ -204,12 +204,17 @@ python3 scripts/install-kde-status.py --cli "$(command -v syauth)"
 Use `--cli /absolute/path/to/syauth-status` for a separately installed status
 client. The selected executable must support `status --json`. No root access is
 needed. The next lockscreen shows connected, disconnected, or unavailable status
-and keeps password entry available. Status checks never request approval.
+and keeps password entry available. During a phone request it shows "Waiting for
+approval on your phone. You can also enter your password." When the request
+finishes or is cancelled, the connection message returns. Status checks never
+request approval.
 
 The label polls once per second and reports unavailable after three seconds
 without a usable reply. `connected` comes from the current GATT notification
 subscription, so historical connection timestamps do not count as readiness.
-Unknown state, malformed output, and older daemons show unavailable.
+Unknown state, malformed output, and older daemons show unavailable. The daemon
+keeps status queries responsive while waiting for a fingerprint, so an active
+request does not make the label report unavailable.
 
 Plasma 6.8 loads the lockscreen from its shell package. The installer reads
 `plasmashellrc`'s `Shell/ShellPackage`, defaulting to `org.kde.plasma.desktop`,

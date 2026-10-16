@@ -263,7 +263,7 @@ struct PeerCharSet {
     /// Receiver side of the per-peer response buffer. `Mutex` so the
     /// trait method can take exclusive access to a single shared
     /// receiver without requiring `&mut self`.
-    response_rx: Mutex<mpsc::Receiver<Vec<u8>>>,
+    response_rx: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
     /// Sender side. Held alongside the receiver so the peer's
     /// channel stays alive across the call lifecycle of the GATT
     /// WRITE callback.
@@ -938,7 +938,7 @@ impl PersistentPeripheral {
             if let Some(entry) = peers.get_mut(peer_id) {
                 *entry.notifier_slot.lock().await = None;
                 entry.notifier_slot = notifier_slot;
-                entry.response_rx = Mutex::new(response_rx);
+                entry.response_rx = Arc::new(Mutex::new(response_rx));
                 entry._response_tx = response_tx;
                 *entry.task_handle.lock().await = Some(task);
             }
@@ -979,7 +979,7 @@ impl Peripheral for PersistentPeripheral {
         peers.insert(
             peer_id.to_owned(),
             PeerCharSet {
-                response_rx: Mutex::new(response_rx),
+                response_rx: Arc::new(Mutex::new(response_rx)),
                 _response_tx: response_tx,
                 notifier_slot,
                 task_handle: Mutex::new(Some(task)),
@@ -1083,29 +1083,34 @@ impl Peripheral for PersistentPeripheral {
     }
 
     async fn wait_for_response(&self, peer_id: &str, deadline: Duration) -> Result<Vec<u8>, PeripheralError> {
-        // We hold the outer peers-map lock across the await on
-        // `rx.recv()`. S-003/S-006 do not exercise concurrent
-        // challenges on the SAME peer — SPEC §3 scope item #7 caps
-        // in-flight challenges at one per peer — so the lock-across-
-        // await pattern is correct for the persistent peripheral.
-        // The fake exposes a more parallel-friendly shape because
-        // its tests are the only place that exercise multi-peer
-        // concurrency in CI.
-        let peers = self.peers.lock().await;
+        wait_for_peer_response(&self.peers, peer_id, deadline).await
+    }
+}
+
+/// Wait on one response channel while keeping the peer map available to status queries.
+async fn wait_for_peer_response(
+    peers: &Mutex<HashMap<String, PeerCharSet>>,
+    peer_id: &str,
+    deadline: Duration,
+) -> Result<Vec<u8>, PeripheralError> {
+    let receiver = {
+        let peers = peers.lock().await;
         let peer = peers.get(peer_id).ok_or_else(|| PeripheralError::UnknownPeer {
             peer_id: peer_id.to_owned(),
         })?;
-        let mut rx = peer.response_rx.lock().await;
-        match tokio::time::timeout(deadline, rx.recv()).await {
-            Ok(Some(bytes)) => Ok(bytes),
-            Ok(None) => Err(PeripheralError::Backend {
-                reason: format!("response channel closed for peer_id={peer_id}"),
-            }),
-            Err(_) => Err(PeripheralError::ResponseTimeout {
-                peer_id: peer_id.to_owned(),
-                deadline_ms: u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
-            }),
-        }
+        Arc::clone(&peer.response_rx)
+    };
+    // Status reads need the peer map while fingerprint approval is pending.
+    let mut rx = receiver.lock().await;
+    match tokio::time::timeout(deadline, rx.recv()).await {
+        Ok(Some(bytes)) => Ok(bytes),
+        Ok(None) => Err(PeripheralError::Backend {
+            reason: format!("response channel closed for peer_id={peer_id}"),
+        }),
+        Err(_) => Err(PeripheralError::ResponseTimeout {
+            peer_id: peer_id.to_owned(),
+            deadline_ms: u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
+        }),
     }
 }
 
@@ -1335,6 +1340,36 @@ const FAKE_RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn status_can_read_peers_while_phone_response_is_pending() {
+        let (tx, rx) = mpsc::channel(RESPONSE_BUFFER_DEPTH);
+        let receiver = Arc::new(Mutex::new(rx));
+        let peers = Arc::new(Mutex::new(HashMap::from([(
+            "phone".to_owned(),
+            PeerCharSet {
+                response_rx: Arc::clone(&receiver),
+                _response_tx: tx.clone(),
+                notifier_slot: Arc::new(Mutex::new(None)),
+                task_handle: Mutex::new(None),
+                bond_key: [0; BOND_KEY_BYTES],
+            },
+        )])));
+        let waiting_peers = Arc::clone(&peers);
+        let waiting = tokio::spawn(async move { wait_for_peer_response(&waiting_peers, "phone", Duration::from_secs(8)).await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while receiver.try_lock().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("response receiver should be waiting for the phone");
+        let readable = tokio::time::timeout(Duration::from_millis(50), peers.lock()).await;
+        assert!(readable.is_ok(), "status is blocked while waiting for fingerprint approval");
+        drop(readable);
+        tx.send(vec![1, 2, 3]).await.expect("phone response");
+        assert_eq!(waiting.await.expect("response task").expect("response bytes"), vec![1, 2, 3]);
+    }
+
     #[test]
     fn reconnect_requires_an_explicit_phone_address() {
         assert_eq!(super::reconnect_device(None).expect("unset address"), None);

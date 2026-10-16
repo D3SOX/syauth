@@ -16,6 +16,8 @@ TestCase {
         status.command = "printf '%s' '" + report([{connected: true}]) + "'";
         status.polling = true;
         tryCompare(status, "connectionState", "connected", 3000);
+        status.command = "printf '%s' '" + report([{connected: true, in_flight_challenges: 1}]) + "'";
+        tryCompare(status, "connectionState", "pending", 3000);
         status.command = "printf '%s' '" + report([{connected: false}]) + "'";
         tryCompare(status, "connectionState", "disconnected", 3000);
     }
@@ -33,6 +35,20 @@ TestCase {
         verify(status.text.includes("enter your password"));
         status.update(0, report([{connected: true}]));
         compare(status.connectionState, "connected");
+    }
+
+    function test_pending_approval_and_return_to_idle() {
+        status.update(0, report([{connected: true, in_flight_challenges: 1}]));
+        compare(status.connectionState, "pending");
+        verify(status.text.includes("Waiting for approval on your phone"));
+        verify(status.text.includes("enter your password"));
+        status.update(0, report([{connected: true, in_flight_challenges: 0}]));
+        compare(status.connectionState, "connected");
+        verify(status.text.includes("press Enter"));
+        status.update(0, report([{connected: false, in_flight_challenges: 1}]));
+        compare(status.connectionState, "pending");
+        status.update(0, report([{connected: false, in_flight_challenges: 0}]));
+        compare(status.connectionState, "disconnected");
     }
 
     function test_only_the_static_phone_instruction_is_replaced() {
@@ -53,13 +69,18 @@ TestCase {
 
     function test_unavailable(data) {
         status.update(0, report([{connected: true}]));
+        status.update(0, report([{connected: true, in_flight_challenges: 1}]));
         status.update(data.code, data.output);
         compare(status.connectionState, "unknown");
         verify(status.text.includes("enter your password"));
     }
 
-    function test_stale_status_expires() {
-        status.update(0, report([{connected: true}]));
+    function test_stale_status_expires_data() {
+        return [{tag: "idle", active: 0}, {tag: "pending", active: 1}];
+    }
+
+    function test_stale_status_expires(data) {
+        status.update(0, report([{connected: true, in_flight_challenges: data.active}]));
         tryCompare(status, "connectionState", "unknown", 4000);
     }
 }

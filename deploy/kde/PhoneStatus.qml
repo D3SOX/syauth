@@ -11,11 +11,13 @@ PlasmaComponents3.Label {
     property string connectionState: "unknown"
     property bool polling: visible
 
-    text: connectionState === "connected"
-        ? qsTr("Phone connected — press Enter to request approval")
-        : connectionState === "disconnected"
-            ? qsTr("Phone disconnected — enter your password")
-            : qsTr("Phone status unavailable — enter your password")
+    text: connectionState === "pending"
+        ? qsTr("Waiting for approval on your phone. You can also enter your password.")
+        : connectionState === "connected"
+            ? qsTr("Phone connected — press Enter to request approval")
+            : connectionState === "disconnected"
+                ? qsTr("Phone disconnected — enter your password")
+                : qsTr("Phone status unavailable — enter your password")
     textFormat: Text.PlainText
     horizontalAlignment: Text.AlignHCenter
     wrapMode: Text.WordWrap
@@ -32,7 +34,9 @@ PlasmaComponents3.Label {
             const report = JSON.parse(output);
             if (report.daemon.state !== "up") return;
             const peers = report.daemon.peers;
-            if (peers.some(peer => peer.connected === true)) {
+            if (peers.some(peer => peer.in_flight_challenges > 0)) {
+                connectionState = "pending";
+            } else if (peers.some(peer => peer.connected === true)) {
                 connectionState = "connected";
             } else if (peers.length === 0 || peers.every(peer => peer.connected === false)) {
                 connectionState = "disconnected";

@@ -93,6 +93,10 @@ def run():
         try:
             until("SYAUTH-PACKAGE " + lockscreen.as_uri())
             until("SYAUTH-STATUS Phone connected")
+            report.write_text(json.dumps({"daemon": {"state": "up", "peers": [{"connected": True, "in_flight_challenges": 1}]}}))
+            until("SYAUTH-STATUS Waiting for approval on your phone", 4)
+            report.write_text(json.dumps({"daemon": {"state": "up", "peers": [{"connected": True, "in_flight_challenges": 0}]}}))
+            until("SYAUTH-STATUS Phone connected", 4)
             report.write_text(json.dumps({"daemon": {"state": "up", "peers": [{"connected": False}]}}))
             until("SYAUTH-STATUS Phone disconnected", 4)
             report.write_text("unavailable")
