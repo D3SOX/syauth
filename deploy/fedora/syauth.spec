@@ -1,15 +1,15 @@
 # Fedora RPM spec for syauth v0.1.0 (roadmap item S-021).
 #
 # This spec ships the Linux desktop side of syauth — the PAM cdylib
-# under %{_libdir}/security/pam_syauth.so (mode 0644 per SPEC §6 +
+# under %%{_libdir}/security/pam_syauth.so (mode 0644 per SPEC §6 +
 # specs/threat/THREAT-2026-05-15.md), the `syauth` CLI under
-# %{_bindir}/syauth (mode 0755), the manpage under
-# %{_mandir}/man8/syauth.8.gz, and the doc set. The %post scriptlet
+# %%{_bindir}/syauth (mode 0755), the manpage under
+# %%{_mandir}/man8/syauth.8.gz, and the doc set. The %post scriptlet
 # creates /var/lib/syauth/ with mode 0700 (the bond-store dir; bond
 # records inside it land at 0600 via the `syauth pair` CLI from S-005).
 # %preun deliberately does nothing because the bond store is persisted
 # user state — uninstalling the package does NOT revoke any paired
-# phone. Built under `mock -r fedora-%{fedora}-x86_64 deploy/fedora/syauth.spec`
+# phone. Built under `mock -r fedora-%%{fedora}-x86_64 deploy/fedora/syauth.spec`
 # or via `make rpm` (which gates on `which mock`).
 
 %global package_version 0.1.0
@@ -37,7 +37,7 @@ ExclusiveArch:  x86_64 aarch64
 # bindings; bluez-libs-devel for the BlueZ DBus interface that bluer
 # wraps; openssl-devel
 # for the rustls/ring transitive crypto. systemd-rpm-macros provides
-# %{_unitdir} (unused in v0.1, declared for forward compatibility).
+# %%{_unitdir} (unused in v0.1, declared for forward compatibility).
 BuildRequires:  cargo >= 1.85
 BuildRequires:  rust >= 1.85
 BuildRequires:  pam-devel
@@ -113,7 +113,7 @@ gzip -9 target/man/syauth.8
 
 %check
 target/release/syauth --help | grep -q pair
-target/release/syauth-presenced --help | grep -q peripheral
+target/release/syauth-presenced --help | grep -q -- '--socket'
 
 %install
 install -D -m 0755 target/release/syauth-presenced \
