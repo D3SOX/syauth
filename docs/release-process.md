@@ -7,6 +7,20 @@ Operational handbook for cutting a syauth release. Companion to
 Audience: the maintainer cutting a tagged release. Not the end user
 (see the top-level `README.md` for that).
 
+## CI validation
+
+CI installs stable Rust. To reproduce a run locally, select its exact compiler
+with `RUSTUP_TOOLCHAIN` and run `make lint`, `make test`, and `make build`
+with `RUSTFLAGS='-D warnings'`. Preserve the committed `Cargo.lock`.
+`async-trait` must be at least 0.1.92 for Rust 1.99's generated-code lint.
+
+`deny.toml` records three informational maintenance exceptions for the zbus 5
+type crates used by `secret-service` 5. These are not vulnerability advisories.
+Remove the exceptions when a compatible Secret Service release migrates to
+zbus 6; upstream work is tracked in
+[secret-service-rs#122](https://github.com/open-source-cooperative/secret-service-rs/pull/122).
+See [BUG-20261018-2106](../specs/bugs/BUG-20261018-2106.md) for evidence.
+
 ## Native Fedora RPM build
 
 On a Fedora build host with the spec's build requirements installed, commit
