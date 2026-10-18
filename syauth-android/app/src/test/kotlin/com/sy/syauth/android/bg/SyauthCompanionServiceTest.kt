@@ -83,6 +83,22 @@ class SyauthCompanionServiceTest {
     }
 
     @Test
+    fun bluetooth_cycle_resumes_the_same_owned_client_immediately() {
+        val factory = RecordingGattClientFactory()
+        SyauthCompanionService.bondListProvider = BondListProvider { listOf(bondFor(FIXTURE_PEER_A)) }
+        SyauthCompanionService.gattClientFactory = factory
+        val controller = Robolectric.buildService(SyauthCompanionService::class.java).create()
+        val service = controller.get()
+        service.sendBroadcast(android.content.Intent(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED).putExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, android.bluetooth.BluetoothAdapter.STATE_TURNING_OFF))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(1, factory.created.single().second.stopCalls)
+        service.sendBroadcast(android.content.Intent(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED).putExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, android.bluetooth.BluetoothAdapter.STATE_ON))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(2, factory.created.single().second.startCalls)
+        controller.destroy()
+    }
+
+    @Test
     fun starts_foreground_with_connected_device_type() {
         SyauthCompanionService.bondListProvider = BondListProvider { emptyList() }
         SyauthCompanionService.gattClientFactory = RecordingGattClientFactory()

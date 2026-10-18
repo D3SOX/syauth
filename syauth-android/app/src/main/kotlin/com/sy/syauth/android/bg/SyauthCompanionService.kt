@@ -24,13 +24,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 import com.sy.syauth.android.bond.BondRecord
 import com.sy.syauth.android.bond.loadPersistedBond
@@ -245,6 +249,16 @@ public class SyauthCompanionService : Service() {
     internal var lastForegroundType: Int = 0
         private set
 
+    private val radioReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> clients.values.forEach { it.stop() }
+                BluetoothAdapter.STATE_ON -> clients.values.forEach { it.start() }
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -254,6 +268,7 @@ public class SyauthCompanionService : Service() {
         startForegroundCompat(notification)
         ensureDefaultGattClientFactory()
         ensureDefaultCompanionSeams()
+        ContextCompat.registerReceiver(this, radioReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED)
         injectClientsForBonds()
         isRunning.set(true)
         Log.i(SYAUTH_BG_LOG_TAG, "onCreate: foreground up, clients=${clients.size}")
@@ -267,6 +282,7 @@ public class SyauthCompanionService : Service() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(radioReceiver)
         for ((peerId, client) in clients) {
             runCatching { client.stop() }
                 .onFailure {

@@ -22,11 +22,13 @@ use syauth_cli::{
     install_pam::{self, InstallOpts, InstallOutcome},
     install_presenced::{self, InstallPresencedOpts, InstallPresencedOutcome},
     list::run_list,
-    pair::ListOpts,
+    pair::{ListOpts, PairOpts, run_pair},
+    pair_backend::BluerPairBackend,
     revoke::{RevokeOpts, run_revoke},
     status::{StatusOpts, run_status},
     uninstall_pam::{self, UninstallOpts, UninstallOutcome},
 };
+use syauth_core::SigningKey;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -40,8 +42,16 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// Length of the Ed25519 secret seed behind the per-invocation host pair
+/// key (`syauth_core::SigningKey::from_bytes`).
+const SIGNING_KEY_SECRET_BYTES: usize = 32;
+
 #[derive(Debug, Subcommand)]
 enum Cmd {
+    /// Pair a phone with this desktop. Runs LE Secure Connections numeric
+    /// comparison followed by the app-level OOB confirmation, then writes
+    /// the bond on `[y/N]` = Y.
+    Pair(PairOpts),
     /// Print the bonds file as TSV: id\tname\tstatus\tcreated_at.
     List(ListOpts),
     /// Mark a bond as revoked (idempotent). The bond record itself is
@@ -96,6 +106,7 @@ fn main() -> ExitCode {
 
 async fn dispatch(cli: Cli) -> Result<()> {
     match cli.cmd {
+        Cmd::Pair(opts) => run_pair_cli(&opts).await,
         Cmd::List(opts) => run_list_cli(&opts),
         Cmd::Revoke(opts) => run_revoke_cli(&opts),
         Cmd::Status(opts) => run_status_cli(&opts).await,
@@ -104,6 +115,22 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::InstallPresenced(opts) => run_install_presenced(&opts),
         Cmd::Doctor(opts) => run_doctor_cli(&opts),
     }
+}
+
+/// Drive the pair flow against the real adapter.
+///
+/// The host's pair-time key is generated per invocation and never
+/// persisted: the phone uses it only as HKDF input, and the derived
+/// `bond_key` is committed to disk once at pair time. This mirrors
+/// `syauth-presenced`, which likewise keeps a non-persisted host pubkey
+/// for the pair service.
+async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
+    let mut secret = [0u8; SIGNING_KEY_SECRET_BYTES];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut secret);
+    let signing_key = SigningKey::from_bytes(&secret);
+    let backend = BluerPairBackend::new(&opts.adapter, &signing_key);
+    run_pair(opts, &backend).await?;
+    Ok(())
 }
 
 fn run_doctor_cli(opts: &DoctorOpts) -> Result<()> {

@@ -349,6 +349,7 @@ public class RealPairBackend(
 
     /** Resolved by the bond-state receiver. */
     private val lescResultDeferred: CompletableDeferred<LescResult> = CompletableDeferred()
+    private val exchangeStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Pairing-request receiver registered at init. */
     private val pairingReceiver: PairingBroadcastReceiver = PairingBroadcastReceiver(
@@ -587,6 +588,7 @@ public class RealPairBackend(
      * matrix synchronously without spinning up a real GATT stack.
      */
     internal fun runPostBondExchange(address: String) {
+        if (cleanedUp || !exchangeStarted.compareAndSet(false, true)) return
         val exchange = gattExchange
         if (exchange == null) {
             lescResultDeferred.complete(LescResult.Failed(GATT_EXCHANGE_MISSING_REASON))

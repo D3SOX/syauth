@@ -577,10 +577,22 @@ class MainActivity : FragmentActivity() {
                         bondRecord = bondRecord.value,
                         cdmPairScanner = cdmPairScanner,
                         onRevoke = ::onBondRevokeTapped,
+                        onPairingCompleted = ::onPairingCompleted,
                     )
                 }
             }
         }
+    }
+
+    /** Publish the newly persisted bond before returning from the pairing screen. */
+    internal fun onPairingCompleted() {
+        val record = loadPersistedBond(filesDir) ?: return
+        bondRecord.value = record
+        installCompanionSeams(record)
+        installPersistentClientFactory(record)
+        startObservingForBondedAssociations(record)
+        startSyauthCompanionForegroundService()
+        scheduleSyauthWatchdog()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -634,6 +646,7 @@ private fun SyauthApp(
     bondRecord: BondRecord?,
     cdmPairScanner: AndroidCdmPairCompanionScanner?,
     onRevoke: () -> Unit,
+    onPairingCompleted: () -> Unit,
 ) {
     val navController = rememberNavController()
     val homeContext = activity.applicationContext
@@ -683,6 +696,7 @@ private fun SyauthApp(
                 onOobYes = viewModel::onOobYesTapped,
                 onOobNo = viewModel::onOobNoTapped,
                 onDone = {
+                    onPairingCompleted()
                     navController.popBackStack(NavRoutes.HOME, inclusive = false)
                 },
             )

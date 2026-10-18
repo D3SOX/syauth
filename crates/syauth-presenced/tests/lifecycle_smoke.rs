@@ -7,6 +7,8 @@
 //   TC-02 — refuses_second_instance: spawn one instance, spawn a
 //           second with the same flags, assert the second exits
 //           non-zero while the first keeps running.
+// BUG-20261018-1710: use the fake peripheral; lifecycle tests must not
+// register another BlueZ agent or wait for the live adapter during startup.
 
 use std::{
     path::{Path, PathBuf},
@@ -127,6 +129,8 @@ impl TestEnv {
             .arg(self.pidfile_path())
             .arg("--log-level")
             .arg("error")
+            .arg("--peripheral")
+            .arg("fake")
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())

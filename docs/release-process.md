@@ -7,6 +7,15 @@ Operational handbook for cutting a syauth release. Companion to
 Audience: the maintainer cutting a tagged release. Not the end user
 (see the top-level `README.md` for that).
 
+## Native Fedora RPM build
+
+On a Fedora build host with the spec's build requirements installed, commit
+the intended release sources and run `make rpm-native`. This packages committed
+HEAD, excluding unrelated working-tree changes. Artifacts are written to
+`target/rpm/f<host-release>/`. `CARGO_TARGET_DIR` can name an absolute build cache.
+The RPM includes the CLI, PAM module, presence daemon, and systemd user unit.
+Upgrades preserve existing bond-directory ownership and do not edit PAM stacks.
+
 ## 1. Linux release pipeline
 
 The Linux side ships two artifacts per tag: a Fedora 39+ RPM and a

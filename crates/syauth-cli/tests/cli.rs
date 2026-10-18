@@ -12,7 +12,7 @@
 //! |-----|-----|----------------------------------------------------------------|
 //! | 01  | #4  | `--version` prints semver, exits 0.                            |
 //! | 02  | #5  | Top-level `--help` snapshot pinned.                            |
-//! | 03  | #5  | `pair --help` snapshot.                                        |
+//! | 03  | #5  | `pair --help` reachable + flags pinned (BUG-20261018-0120).   |
 //! | 04  | #5  | `list --help` snapshot.                                        |
 //! | 05  | #5  | `revoke --help` snapshot.                                      |
 //! | 06  | #5  | `status --help` snapshot.                                      |
@@ -317,4 +317,29 @@ fn status_reports_no_entries_when_last_log_absent() {
         stdout.contains("last-unlock:       (no entries)"),
         "absent log must surface as (no entries): {stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// TC-03 (restored, BUG-20261018-0120): `pair` must be reachable from the
+// shipped binary. The subcommand disappeared from `main.rs::dispatch` while
+// its own coverage rows were deleted with it, which let a HEAD build ship
+// without any pair path at all. Asserted against the real binary surface
+// rather than a snapshot so a future removal fails here first.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pair_subcommand_is_reachable_and_documents_its_flags() {
+    let out = syauth().args(["pair", "--help"]).assert().success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    for flag in [
+        "--adapter",
+        "--peer",
+        "--timeout-secs",
+        "--bond-dir",
+        "--yes",
+        "--waybar",
+        "--force",
+    ] {
+        assert!(stdout.contains(flag), "`pair --help` must document {flag}: {stdout}");
+    }
 }

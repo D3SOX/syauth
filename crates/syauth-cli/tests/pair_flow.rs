@@ -17,6 +17,10 @@
 //! | 05  | "syauth list shows the new peer immediately" | TC-01 store passed to `render_list_to` ⇒ output contains the peer name.    |
 //! | 06  | "ambiguous --peer with --yes"               | Two candidates match `--peer pixel` + `--yes` → `AmbiguousPeer { ... }`.   |
 //! | 07  | "--yes does not skip the LESC check"         | `LescUnsupported` is returned even when `--yes` is set.                    |
+//! | 08  | BUG-20261018-0120 (SPEC §3.2 D5)             | Default flags install the stdio numeric-comparison answer before scanning. |
+//! | 09  | BUG-20261018-0120                            | `--yes` installs the auto-accept answer.                                  |
+//! | 10  | BUG-20261018-0120                            | `--waybar` installs the waybar answer.                                    |
+//! | 11  | BUG-20261018-0120                            | The flow's prompt is servable from the operator-keystroke queue.          |
 //!
 //! All seven cases collectively satisfy the brief's "at least 4 cases" floor
 //! (golden, LESC-unsupported, timeout, rejected-Y/N) plus three additional
@@ -28,7 +32,10 @@ use std::{
     fs,
     io::Cursor,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -36,8 +43,8 @@ use async_trait::async_trait;
 use syauth_cli::{
     list::render_list_to,
     pair::{
-        AdapterInfo, LescOutcome, ListOpts, PairBackend, PairCandidate, PairError, PairOpts, PairingPhase, RevokeReason, bonds_path,
-        run_pair_with_io,
+        AdapterInfo, ConfirmSource, LescOutcome, ListOpts, PairBackend, PairCandidate, PairError, PairOpts, PairingPhase, RevokeReason,
+        bonds_path, run_pair_with_io,
     },
 };
 use syauth_core::{BondStore, peer_id_from_pubkey};
@@ -62,6 +69,9 @@ const GOLDEN_NUMERIC_CODE: u32 = 482_615;
 const TIMEOUT_SECS_TIGHT: u64 = 1;
 const TIMEOUT_SECS_LOOSE: u64 = 60;
 const TIMEOUT_GRACE: TokioDuration = TokioDuration::from_millis(500);
+/// Delay before a simulated operator keystroke lands on the queue, so a
+/// prompt that blocks waiting for input is provably waiting (TC-11).
+const OPERATOR_LINE_DELAY_MS: u64 = 100;
 
 fn temp_bond_dir() -> TempDir {
     TempDir::new().expect("tempdir")
@@ -136,6 +146,14 @@ struct MockPairBackend {
     /// Signaled if `initiate_lesc_with_peer` is ever entered. Useful for the
     /// timeout test to assert the backend was actually reached.
     entered_lesc: Arc<Notify>,
+    /// How many times the flow installed an OS numeric-comparison answer
+    /// surface (BUG-20261018-0120).
+    confirm_installs: Arc<AtomicUsize>,
+    /// Which surface it installed, in install order.
+    confirm_sources: Arc<Mutex<Vec<ConfirmSource>>>,
+    /// Set by `scan_peers` when it ran with zero installs behind it — the
+    /// radio was touched before any answer path existed.
+    scanned_without_confirm: Arc<AtomicBool>,
 }
 
 impl MockPairBackend {
@@ -143,7 +161,15 @@ impl MockPairBackend {
         Self {
             cfg: Mutex::new(cfg),
             entered_lesc: Arc::new(Notify::new()),
+            confirm_installs: Arc::new(AtomicUsize::new(0)),
+            confirm_sources: Arc::new(Mutex::new(Vec::new())),
+            scanned_without_confirm: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Surfaces installed so far, in call order.
+    fn sources(&self) -> Vec<ConfirmSource> {
+        self.confirm_sources.lock().expect("sources lock").clone()
     }
 }
 
@@ -158,6 +184,9 @@ impl PairBackend for MockPairBackend {
     }
 
     async fn scan_peers(&self) -> Result<Vec<PairCandidate>, PairError> {
+        if self.confirm_installs.load(Ordering::SeqCst) == 0 {
+            self.scanned_without_confirm.store(true, Ordering::SeqCst);
+        }
         Ok(self.cfg.lock().expect("cfg lock").candidates.clone())
     }
 
@@ -178,6 +207,11 @@ impl PairBackend for MockPairBackend {
                 unreachable!("hang-forever future must be canceled by timeout");
             }
         }
+    }
+
+    fn install_os_confirm(&self, source: ConfirmSource) {
+        self.confirm_installs.fetch_add(1, Ordering::SeqCst);
+        self.confirm_sources.lock().expect("sources lock").push(source);
     }
 }
 
@@ -431,4 +465,92 @@ fn pair_opts_round_trip_via_struct_default_paths() {
     assert_eq!(opts.timeout_secs, TIMEOUT_SECS_LOOSE);
     assert!(opts.yes);
     assert_eq!(opts.peer.as_deref(), Some(TEST_PEER_NAME));
+}
+
+// ---------------------------------------------------------------------------
+// TC-08..10 (BUG-20261018-0120): the pair flow must install the surface that
+// answers BlueZ's LESC numeric comparison, and it must do so before it
+// touches the radio. The agent's no-handler fallback is a silent reject, so
+// a missing install looks to the operator like "the phone refuses to pair".
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pair_flow_installs_os_confirm_source_before_touching_the_radio() {
+    let td = temp_bond_dir();
+    let backend = MockPairBackend::new(MockConfig::golden());
+    let opts = pair_opts(&td, None, TIMEOUT_SECS_LOOSE, false);
+
+    let _ = drive_pair(&opts, &backend, "y\n").await.expect("pair must succeed");
+
+    assert_eq!(
+        backend.sources(),
+        vec![ConfirmSource::Stdio],
+        "default flags must answer the numeric comparison on the operator's terminal"
+    );
+    assert!(
+        !backend.scanned_without_confirm.load(Ordering::SeqCst),
+        "scan_peers ran before any OS answer surface existed"
+    );
+}
+
+#[tokio::test]
+async fn yes_flag_installs_auto_accept_os_confirm_source() {
+    let td = temp_bond_dir();
+    let backend = MockPairBackend::new(MockConfig::golden());
+    let opts = pair_opts(&td, None, TIMEOUT_SECS_LOOSE, true);
+
+    let _ = drive_pair(&opts, &backend, "").await.expect("pair must succeed");
+
+    assert_eq!(
+        backend.sources(),
+        vec![ConfirmSource::AutoAccept],
+        "`--yes` must answer the numeric comparison without waiting on a keystroke"
+    );
+}
+
+#[tokio::test]
+async fn waybar_flag_installs_waybar_os_confirm_source() {
+    let td = temp_bond_dir();
+    let backend = MockPairBackend::new(MockConfig::golden());
+    let mut opts = pair_opts(&td, None, TIMEOUT_SECS_LOOSE, false);
+    opts.waybar = true;
+
+    let _ = drive_pair(&opts, &backend, "y\n").await.expect("pair must succeed");
+
+    assert_eq!(
+        backend.sources(),
+        vec![ConfirmSource::Waybar],
+        "`--waybar` must answer the numeric comparison through the bar applet"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TC-11 (BUG-20261018-0120): the production entry point feeds the flow's
+// prompt from the shared operator-keystroke queue instead of holding
+// `io::stdin()` for the whole run. This test pins that the queue satisfies
+// the flow's prompt contract — a keystroke delivered from another thread
+// while the flow is awaiting must resolve the OOB prompt.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pair_flow_prompt_is_served_by_the_operator_line_queue() {
+    let td = temp_bond_dir();
+    let backend = MockPairBackend::new(MockConfig::golden());
+    let opts = pair_opts(&td, None, TIMEOUT_SECS_LOOSE, false);
+    let lines = backend.operator_lines();
+    let operator = lines.clone();
+    tokio::task::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_millis(OPERATOR_LINE_DELAY_MS));
+        operator.push("y");
+    });
+
+    let mut reader = std::io::BufReader::new(lines.reader());
+    let mut writer: Vec<u8> = Vec::new();
+    let phase = run_pair_with_io(&opts, &backend, &mut reader, &mut writer)
+        .await
+        .expect("a keystroke delivered mid-run must resolve the prompt");
+
+    assert_eq!(phase, PairingPhase::Bonded);
+    let out = String::from_utf8_lossy(&writer).into_owned();
+    assert!(out.contains("bonded"), "bonded banner must land: {out}");
 }

@@ -45,7 +45,7 @@ NoNewPrivileges=yes
 # override --bonds-file / --keys-dir / the audit path via a drop-in.
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/syauth /var/log/syauth
+ReadWritePaths=/var/lib/syauth /var/log/syauth %t
 
 [Install]
 WantedBy=default.target

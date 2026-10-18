@@ -45,6 +45,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -142,6 +143,89 @@ private fun shadowGattAddService(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PersistentGattClientTest {
+    @Before
+    fun radioIsEnabled() {
+        shadowOf(BluetoothAdapter.getDefaultAdapter()).setState(BluetoothAdapter.STATE_ON)
+    }
+    @Test
+    fun radio_off_does_not_open_or_poll_gatt() {
+        shadowOf(BluetoothAdapter.getDefaultAdapter()).setState(BluetoothAdapter.STATE_OFF)
+        val opener = RecordingOpener(newShadowGatt())
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        shadowOf(Looper.getMainLooper()).idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        assertEquals(0, opener.openCalls)
+        client.stop()
+    }
+
+
+    @Test
+    fun connected_without_subscription_keeps_the_recovery_deadline() {
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        opener.lastCallback!!.onConnectionStateChange(handle, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+        shadowOf(Looper.getMainLooper()).idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        assertEquals(2, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    fun failed_subscription_keeps_the_recovery_deadline() {
+        val handle = newShadowGatt()
+        val opener = RecordingOpener(handle)
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        opener.lastCallback!!.onDescriptorWrite(handle, makeChallengeChar().getDescriptor(TEST_CCCD_UUID), BluetoothGatt.GATT_FAILURE)
+        shadowOf(Looper.getMainLooper()).idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        assertEquals(2, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    fun null_open_is_retried_without_a_callback() {
+        var attempts = 0
+        val opener = GattOpener { _, _, _ -> attempts++; null }
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        shadowOf(Looper.getMainLooper()).idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        assertEquals(2, attempts)
+        client.stop()
+    }
+
+    @Test
+    fun throwing_open_is_retried_without_a_callback() {
+        var attempts = 0
+        val opener = GattOpener { _, _, _ -> attempts++; error("stack unavailable") }
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        shadowOf(Looper.getMainLooper()).idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        assertEquals(2, attempts)
+        client.stop()
+    }
+
+    @Test
+    fun reconnect_cannot_revive_a_stopped_client() {
+        val opener = RecordingOpener(newShadowGatt())
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        client.stop()
+        client.forceReconnect()
+        assertEquals(1, opener.openCalls)
+    }
+
+    @Test
+    fun callbacks_from_a_closed_handle_do_not_deliver_challenges() {
+        val old = newShadowGatt()
+        val opener = RecordingOpener(newShadowGatt())
+        var delivered = 0
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> delivered++ }, opener)
+        client.start()
+        opener.lastCallback!!.onCharacteristicChanged(old, makeChallengeChar(), byteArrayOf(1))
+        assertEquals(0, delivered)
+        client.stop()
+    }
 
     @Test
     fun auto_connect_true_passed_to_connectGatt() {
@@ -230,6 +314,11 @@ class PersistentGattClientTest {
         val cccd = challenge.getDescriptor(TEST_CCCD_UUID)
         assertNotNull("CCCD descriptor present", cccd)
         assertArrayEquals(TEST_CCCD_ENABLE_NOTIFY, cccd.value)
+        callback.onDescriptorWrite(handle, cccd, BluetoothGatt.GATT_SUCCESS)
+        shadowOf(Looper.getMainLooper())
+            .idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        assertEquals("ready subscription cancels setup recovery", 1, opener.openCalls)
+        client.stop()
     }
 
     @Test

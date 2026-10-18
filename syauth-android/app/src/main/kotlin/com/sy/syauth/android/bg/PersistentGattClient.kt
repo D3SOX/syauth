@@ -177,7 +177,7 @@ public class PersistentGattClient internal constructor(
     /**
      * Handler bound to the main looper, owned by the client. The
      * disconnect-watchdog posts itself here on every
-     * `STATE_DISCONNECTED` and is removed on every `STATE_CONNECTED`.
+     * `STATE_DISCONNECTED` and is removed after a successful CCCD acknowledgement.
      * The main looper is fine for this — the runnable just calls
      * `forceReconnect()` which dispatches to the BLE stack's own
      * threads.
@@ -185,29 +185,18 @@ public class PersistentGattClient internal constructor(
     private val reconnectHandler: Handler = Handler(Looper.getMainLooper())
 
     /**
-     * Watchdog that re-issues a fresh `connectGatt` if we are still
-     * disconnected after [RECONNECT_INTERVAL_MS]. Android's
-     * `autoConnect=true` background scan has a very low duty cycle —
-     * after Doze, screen-off, or a long out-of-range absence it can
-     * take many minutes to re-acquire the peer on its own. A fresh
-     * `connectGatt` call resets Android's scan timer, so a periodic
-     * `forceReconnect()` from a watchdog converts that into a
-     * deterministic ~RECONNECT_INTERVAL_MS recovery window.
-     *
-     * The watchdog re-arms itself through `forceReconnect()` →
-     * `start()` (which schedules the next tick), so a single tick
-     * keeps the cadence going until the link is up. Successful
-     * reconnects clear it via `STATE_CONNECTED` in the callback, and
-     * `stop()` clears it directly. The `stopped` guard prevents a
-     * tick that fires concurrently with `stop()` from reopening the
-     * link.
+     * Bound connection setup through discovery and CCCD acknowledgement. A
+     * successful ACL connection alone is not an operational unlock channel.
+     * Android autoConnect remains active between retries; radio enable bypasses
+     * the retry wait through the service's adapter-state receiver. Android scan
+     * scheduling and service discovery determine the actual reconnect latency.
      */
     private val reconnectRunnable: Runnable = object : Runnable {
         override fun run() {
             if (stopped.get()) return
             Log.i(
                 PERSISTENT_GATT_LOG_TAG,
-                "watchdog: still disconnected after ${RECONNECT_INTERVAL_MS}ms — forcing reconnect"
+                "watchdog: setup incomplete after ${RECONNECT_INTERVAL_MS}ms — forcing reconnect"
             )
             forceReconnect()
         }
@@ -218,40 +207,34 @@ public class PersistentGattClient internal constructor(
      * The OS will hold the connection across range transitions
      * without further app calls. Idempotent.
      */
+    @Synchronized
     public fun start() {
         stopped.set(false)
+        if (!runCatching { adapter.isEnabled }.getOrDefault(false)) return
         if (gatt.get() != null) return
+        reconnectHandler.removeCallbacks(reconnectRunnable)
+        reconnectHandler.postDelayed(reconnectRunnable, RECONNECT_INTERVAL_MS)
         val device = runCatching { adapter.getRemoteDevice(deviceMac) }.getOrNull()
         if (device == null) {
             Log.w(PERSISTENT_GATT_LOG_TAG, "start: getRemoteDevice($deviceMac) null")
             return
         }
         Log.i(PERSISTENT_GATT_LOG_TAG, "start: opening autoConnect=true to $deviceMac")
-        val handle = gattOpener.open(device, AUTO_CONNECT_TRUE, gattCallback)
+        val handle = runCatching { gattOpener.open(device, AUTO_CONNECT_TRUE, gattCallback) }
+            .onFailure { Log.w(PERSISTENT_GATT_LOG_TAG, "connectGatt failed; retry remains armed", it) }
+            .getOrNull()
         if (handle == null) {
             Log.w(PERSISTENT_GATT_LOG_TAG, "start: connectGatt returned null")
             return
         }
         gatt.set(handle)
-        // BUG-20260528-0130 → BUG-20260528-2334: arm the reconnect
-        // watchdog NOW, not only on STATE_DISCONNECTED. A
-        // connectGatt(autoConnect=true) that never completes emits NO
-        // onConnectionStateChange callback at all (e.g. the desktop was
-        // mid-`serve_gatt_application` re-registration, briefly out of
-        // range, or Android's low-duty-cycle background scan stalled),
-        // so the disconnected-path scheduling never runs and the client
-        // would wedge forever in a never-completing scan — the desktop
-        // then audits notifier_slot=None / transport-error on every
-        // unlock. A fast successful connect cancels this pending tick via
-        // STATE_CONNECTED before it fires; a stalled connect is retried.
-        reconnectHandler.removeCallbacks(reconnectRunnable)
-        reconnectHandler.postDelayed(reconnectRunnable, RECONNECT_INTERVAL_MS)
     }
 
     /**
      * Tear down the GATT connection. Idempotent — a second call
      * after close is a no-op.
      */
+    @Synchronized
     public fun stop() {
         stopped.set(true)
         reconnectHandler.removeCallbacks(reconnectRunnable)
@@ -276,9 +259,11 @@ public class PersistentGattClient internal constructor(
      *
      * Sequence: disconnect → close → reopen with the same
      * `autoConnect=true` semantics as [start]. Idempotent; safe to
-     * call whether or not the client was previously started.
+     * call while running. An intentionally stopped client stays stopped.
      */
+    @Synchronized
     public fun forceReconnect() {
+        if (stopped.get()) return
         Log.i(PERSISTENT_GATT_LOG_TAG, "forceReconnect: tearing down stale GATT")
         val handle = gatt.getAndSet(null)
         if (handle != null) {
@@ -327,12 +312,11 @@ public class PersistentGattClient internal constructor(
 
     private val gattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (stopped.get() || gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "conn state status=$status new=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    // Cancel any pending reconnect watchdog — we are
-                    // healthy again. (No-op if none was scheduled.)
-                    reconnectHandler.removeCallbacks(reconnectRunnable)
+                    // Keep recovery armed until the CCCD write succeeds.
                     // Always invalidate the on-disk GATT service cache before
                     // re-discovering. The desktop daemon may have re-registered
                     // its GATT app while we held the link alive (e.g. an apt
@@ -351,9 +335,8 @@ public class PersistentGattClient internal constructor(
                     // for field reality (Doze + long out-of-range absences
                     // routinely take minutes to re-acquire). The watchdog
                     // forces a fresh `connectGatt` every RECONNECT_INTERVAL_MS
-                    // which resets Android's scan timer and gives a
-                    // deterministic recovery window once the peer is back
-                    // in range. Cancelled on STATE_CONNECTED above.
+                    // to retry setup while the peer is unavailable. The
+                    // deadline is cleared only after CCCD acknowledgement.
                     if (!stopped.get()) {
                         Log.i(
                             PERSISTENT_GATT_LOG_TAG,
@@ -367,6 +350,7 @@ public class PersistentGattClient internal constructor(
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (stopped.get() || gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "services discovered status=$status n=${g.services.size}")
             val challenge = findCharacteristic(g, SYAUTH_CHALLENGE_CHAR_UUID)
             if (challenge == null) {
@@ -391,6 +375,7 @@ public class PersistentGattClient internal constructor(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
         ) {
+            if (stopped.get() || gatt.get() !== g) return
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             val bytes = characteristic.value ?: return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received len=${bytes.size}")
@@ -402,6 +387,7 @@ public class PersistentGattClient internal constructor(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
+            if (stopped.get() || gatt.get() !== g) return
             if (characteristic.uuid != SYAUTH_CHALLENGE_CHAR_UUID) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "challenge frame received (api33) len=${value.size}")
             onChallenge(peerId, value)
@@ -412,7 +398,11 @@ public class PersistentGattClient internal constructor(
             descriptor: BluetoothGattDescriptor,
             status: Int,
         ) {
+            if (stopped.get() || gatt.get() !== g) return
             Log.i(PERSISTENT_GATT_LOG_TAG, "descriptor write status=$status uuid=${descriptor.uuid}")
+            if (status == BluetoothGatt.GATT_SUCCESS && descriptor.uuid == CCCD_UUID) {
+                reconnectHandler.removeCallbacks(reconnectRunnable)
+            }
         }
     }
 

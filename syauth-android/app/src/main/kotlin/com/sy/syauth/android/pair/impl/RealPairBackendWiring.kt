@@ -45,6 +45,13 @@ public val SYAUTH_PAIR_PHONE_PUBKEY_CHAR_UUID: UUID = UUID.fromString("5a4e8e3c-
 /** Default GATT-exchange wait window for service discovery + char read/write. */
 public const val PAIR_GATT_EXCHANGE_TIMEOUT_SECS: Long = 30L
 
+/** Exchange against a pair service whose phone-key write completes pairing. */
+internal fun exchangePairPubkeys(readHost: () -> ByteArray, writePhone: () -> Unit): ByteArray {
+    val host = readHost()
+    writePhone()
+    return host
+}
+
 /**
  * Production [ReceiverRegistrar] wrapping
  * `Context.registerReceiver` / `Context.unregisterReceiver`.
@@ -134,9 +141,9 @@ public class HkdfPairBondKeyDeriver : PairBondKeyDeriver {
  * Production [PairGattExchange] wrapping
  * `BluetoothDevice.connectGatt(...)`. Used by [RealPairBackend] after
  * `BOND_BONDED` lands; opens a fresh GATT client connection to the
- * (now bonded) device, discovers the pair service, writes the phone
- * pubkey to the `phone-pubkey` characteristic, reads the
- * `host-pubkey` characteristic, and returns the 32 bytes.
+ * (now bonded) device, discovers the pair service, reads the host key,
+ * then writes the phone key. The phone write commits pairing and may
+ * replace the pair service, so it must be the final operation.
  *
  * The implementation uses blocking `CountDownLatch`-driven callbacks
  * because the [PairBackend] surface is synchronous. The backend
@@ -216,22 +223,25 @@ public class AndroidPairGattExchange(
                 ?: throw RuntimeException("phone-pubkey characteristic missing")
             val hostChar = service.getCharacteristic(SYAUTH_PAIR_HOST_PUBKEY_CHAR_UUID)
                 ?: throw RuntimeException("host-pubkey characteristic missing")
-            phoneChar.value = phonePubkey
-            if (!gatt.writeCharacteristic(phoneChar)) {
-                throw RuntimeException("phone-pubkey writeCharacteristic refused")
-            }
-            if (!writeDone.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) {
-                throw RuntimeException("phone-pubkey write timeout")
-            }
-            failure.get()?.let { throw RuntimeException(it) }
-            if (!gatt.readCharacteristic(hostChar)) {
-                throw RuntimeException("host-pubkey readCharacteristic refused")
-            }
-            if (!readDone.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) {
-                throw RuntimeException("host-pubkey read timeout")
-            }
-            failure.get()?.let { throw RuntimeException(it) }
-            return hostPubkey.get() ?: throw RuntimeException("host-pubkey read returned null")
+            return exchangePairPubkeys(readHost = {
+                if (!gatt.readCharacteristic(hostChar)) {
+                    throw RuntimeException("host-pubkey readCharacteristic refused")
+                }
+                if (!readDone.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) {
+                    throw RuntimeException("host-pubkey read timeout")
+                }
+                failure.get()?.let { throw RuntimeException(it) }
+                hostPubkey.get() ?: throw RuntimeException("host-pubkey read returned null")
+            }, writePhone = {
+                phoneChar.value = phonePubkey
+                if (!gatt.writeCharacteristic(phoneChar)) {
+                    throw RuntimeException("phone-pubkey writeCharacteristic refused")
+                }
+                if (!writeDone.await(PAIR_GATT_EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS)) {
+                    throw RuntimeException("phone-pubkey write timeout")
+                }
+                failure.get()?.let { throw RuntimeException(it) }
+            })
         } finally {
             runCatching { gatt.disconnect() }
             runCatching { gatt.close() }
