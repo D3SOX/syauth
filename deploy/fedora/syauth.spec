@@ -109,7 +109,7 @@ README at \fI/usr/share/doc/syauth/README.md\fR for the quick start.
 .SH AUTHORS
 syauth contributors.
 MAN
-gzip -9 target/man/syauth.8
+gzip -9f target/man/syauth.8
 
 %check
 target/release/syauth --help | grep -q pair
