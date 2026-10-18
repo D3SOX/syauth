@@ -3,9 +3,9 @@
 ## Status and scope
 
 Investigation on 2026-10-18, Fedora 44 / BlueZ and the connected Samsung phone.
-Android recovery repairs below are implemented and installed. Notification-session
-closure handling is implemented and tested under BUG-20261018-1736; post-fix
-radio qualification is pending. The remaining desktop and pairing architecture
+Android recovery repairs below are implemented and installed. Standard notification-session
+ownership is implemented and radio-qualified under BUG-20261018-1736 in RPM
+release 3. The earlier acquired-FD cleanup alone failed the live radio test. The remaining desktop and pairing architecture
 below is a proposal, not an implemented guarantee.
 Related reproduction: [BUG-20261018-1710](../bugs/BUG-20261018-1710.md).
 
@@ -75,8 +75,10 @@ the existing fake peripheral. Production initialization still needs cancellation
 and a deadline as part of adapter/BlueZ recovery.
 
 Follow-up: BUG-20261018-1736 removes GATT rebuild from notification write failure
-and monitors socket closure in the control task. This addresses the stale-writer
-ownership defect in code. Initial registration still calls the adapter-wide
+and monitors socket closure in the control task. Release 3 uses standard BlueZ notifications after the acquired-FD variant
+failed radio qualification. A phone radio cycle recovered in approximately 3 s
+without re-registration; the next real swaylock unlock succeeded through phone
+approval in 2.378 s. Initial registration still calls the adapter-wide
 disconnect routine; power/BlueZ rehydration and readiness diagnostics remain open.
 
 ### Pairing ownership and confirmation defects

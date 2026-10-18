@@ -56,3 +56,10 @@ Bluetooth readiness.
 The [recovery design investigation](../specs/frds/FRD-20261018-recovery.md)
 records the desktop registration, pairing confirmation, CDM association, and
 observability changes still needed, with a qualification matrix.
+
+Desktop RPM release 0.1.0-3 uses standard BlueZ notifications. Acquired-FD
+cleanup alone is insufficient on the reference BlueZ: a successful phone CCCD
+write may not yield another AcquireNotify callback. Release 3 keeps a valid
+standard notifier across reconnects. One radio cycle recovered in about 3 s
+without GATT rebuilding, followed by a successful real swaylock phone unlock.
+These observations do not qualify all adapters, Doze, or physical range loss.
