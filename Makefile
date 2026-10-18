@@ -280,7 +280,7 @@ endif
 # Make invocation self-contained.
 
 PACKAGE_VERSION ?= 0.1.0
-RPM_RELEASE     ?= 2
+RPM_RELEASE     ?= 3
 DEB_REVISION    ?= 1
 DIST_PREFIX     ?= syauth-$(PACKAGE_VERSION)
 DIST_TARBALL    ?= target/$(DIST_PREFIX).tar.gz

@@ -49,7 +49,7 @@ use bluer::{
     },
 };
 use futures::{FutureExt, StreamExt};
-use notification::NotificationChannel;
+use notification::{DbusNotifier, NotificationChannel};
 use thiserror::Error;
 use tokio::{
     io::AsyncReadExt,
@@ -65,6 +65,18 @@ use crate::{
     bluez_advertise::{ADVERTISE_DISCOVERABLE, ADVERTISE_LOCAL_NAME},
     error::TransportError,
 };
+
+fn peer_notify_method(tx: mpsc::Sender<DbusNotifier>) -> CharacteristicNotifyMethod {
+    // BlueZ can retain CCCD state after an acquired notification FD closes.
+    // Standard Value notifications avoid coupling that state to a dead FD.
+    CharacteristicNotifyMethod::Fun(Box::new(move |notifier| {
+        let tx = tx.clone();
+        async move {
+            let _ = tx.send(DbusNotifier::new(notifier)).await;
+        }
+        .boxed()
+    }))
+}
 
 /// Per-peer mpsc depth for incoming response frames. Sized to absorb
 /// short bursts of malformed writes without back-pressuring the GATT
@@ -653,7 +665,7 @@ impl PersistentPeripheral {
         ),
         PeripheralError,
     > {
-        let (mut chal_control, chal_handle) = characteristic_control();
+        let (notify_tx, mut notify_rx) = mpsc::channel(RESPONSE_BUFFER_DEPTH);
         let (mut resp_control, resp_handle) = characteristic_control();
         let service_uuid = peer_service_uuid(bond_key);
         let app = Application {
@@ -665,10 +677,9 @@ impl PersistentPeripheral {
                         uuid: SYAUTH_CHALLENGE_CHAR_UUID,
                         notify: Some(CharacteristicNotify {
                             notify: true,
-                            method: CharacteristicNotifyMethod::Io,
+                            method: peer_notify_method(notify_tx),
                             ..Default::default()
                         }),
-                        control_handle: chal_handle,
                         ..Default::default()
                     },
                     Characteristic {
@@ -732,14 +743,11 @@ impl PersistentPeripheral {
                         tracing::info!(target: "syauth_transport", error = ?result.err(), "notification session closed; awaiting re-subscribe");
                     }
                     // Phone subscribes / unsubscribes to challenge notifications.
-                    chal_evt = chal_control.next() => {
+                    chal_evt = notify_rx.recv() => {
                         match chal_evt {
-                            Some(CharacteristicControlEvent::Notify(writer)) => {
-                                tracing::info!(target: "syauth_transport", "chal_control: Notify event — phone subscribed");
+                            Some(writer) => {
+                                tracing::info!(target: "syauth_transport", "phone subscribed via standard notifications");
                                 notifier_slot_for_task.install(Arc::new(writer)).await;
-                            }
-                            Some(CharacteristicControlEvent::Write(_)) => {
-                                tracing::warn!(target: "syauth_transport", "chal_control: unexpected Write event");
                             }
                             None => {
                                 tracing::warn!(target: "syauth_transport", "chal_control: stream ended, task exiting");
@@ -1122,6 +1130,12 @@ const FAKE_RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 mod tests {
     // Journey: specs/journeys/JOURNEY-S-003-peripheral-library-api.md
     use super::*;
+
+    #[test]
+    fn challenge_notifications_use_the_reconnect_safe_dbus_api() {
+        let (tx, _) = mpsc::channel(RESPONSE_BUFFER_DEPTH);
+        assert!(matches!(peer_notify_method(tx), CharacteristicNotifyMethod::Fun(_)));
+    }
 
     /// `PersistentPeripheral::build_advertisement` carries the
     /// daemon-side defaults (local name, discoverable, the requested

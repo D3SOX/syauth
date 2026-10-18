@@ -13,7 +13,7 @@
 # or via `make rpm` (which gates on `which mock`).
 
 %global package_version 0.1.0
-%global rpm_release 2
+%global rpm_release 3
 %global debug_package %{nil}
 %global min_fedora 39
 
@@ -163,6 +163,10 @@ fi
 %{_mandir}/man8/syauth.8.gz
 
 %changelog
+* Sun Oct 18 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-3
+- Use standard BlueZ notifications across phone reconnection.
+- Correct the user unit's documentation URL.
+
 * Sun Oct 18 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-2
 - Ship the presence daemon and user unit with pairing and recovery repairs.
 - Preserve existing bond-directory ownership during upgrades.

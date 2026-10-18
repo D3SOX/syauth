@@ -4,7 +4,11 @@
 use std::{io, sync::Arc};
 
 use async_trait::async_trait;
-use bluer::gatt::CharacteristicWriter;
+use bluer::gatt::local::CharacteristicNotifier;
+use futures::{
+    FutureExt,
+    future::{BoxFuture, Shared},
+};
 use tokio::sync::Mutex;
 
 #[async_trait]
@@ -13,17 +17,30 @@ pub(super) trait NotificationSink: Send + Sync {
     async fn closed(&self) -> io::Result<()>;
 }
 
-#[async_trait]
-impl NotificationSink for CharacteristicWriter {
-    async fn send(&self, frame: &[u8]) -> io::Result<()> {
-        for chunk in frame.chunks(self.mtu()) {
-            CharacteristicWriter::send(self, chunk).await?;
+pub(super) struct DbusNotifier {
+    notifier: Mutex<CharacteristicNotifier>,
+    stopped: Shared<BoxFuture<'static, ()>>,
+}
+
+impl DbusNotifier {
+    pub(super) fn new(notifier: CharacteristicNotifier) -> Self {
+        let stopped = notifier.stopped().boxed().shared();
+        Self {
+            notifier: Mutex::new(notifier),
+            stopped,
         }
-        Ok(())
+    }
+}
+
+#[async_trait]
+impl NotificationSink for DbusNotifier {
+    async fn send(&self, frame: &[u8]) -> io::Result<()> {
+        self.notifier.lock().await.notify(frame.to_vec()).await.map_err(io::Error::other)
     }
 
     async fn closed(&self) -> io::Result<()> {
-        CharacteristicWriter::closed(self).await
+        self.stopped.clone().await;
+        Ok(())
     }
 }
 
