@@ -87,6 +87,9 @@ jobs:
       - name: make test
         run: make test
 
+      - name: Test pacman update checker
+        run: python3 -m unittest discover -s tests -p test_pam_update_check.py
+
   build:
     name: build (release workspace + cdylib)
     runs-on: ubuntu-latest

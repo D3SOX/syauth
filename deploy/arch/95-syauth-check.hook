@@ -1,0 +1,29 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = kscreenlocker
+Target = plasma-desktop
+Target = pam
+Target = pambase
+Target = glibc
+Target = sudo
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = etc/pam.d/*
+Target = usr/lib/pam.d/*
+Target = usr/lib/security/pam_syauth.so
+Target = usr/lib/libgcc_s.so*
+Target = usr/lib/libaudit.so*
+Target = usr/lib/libcap-ng.so*
+
+[Action]
+Description = Checking syauth PAM configuration and module dependencies...
+When = PostTransaction
+Exec = /usr/local/libexec/syauth-update-check
+Depends = python
