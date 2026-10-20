@@ -1,10 +1,14 @@
-"""Exercise the update checker against private files and mocked system commands."""
+"""Exercise the update checker against private files and mocked system commands.
+
+Journey: specs/journeys/JOURNEY-S-013-pam-install-helper.md
+"""
 
 import contextlib
 import importlib.util
 import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -172,6 +176,22 @@ class UpdateCheckTests(unittest.TestCase):
             path.write_text(value)
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(checker.main(["--baseline", str(path)]), 2)
+
+
+class CommandLineTests(unittest.TestCase):
+    def test_missing_baseline_exits_without_writing_or_requiring_pacman(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = subprocess.run(
+                [sys.executable, str(REPO / "scripts/check-pam-update.py"),
+                 "--baseline", str(root / "missing.json")],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("could not complete", result.stderr)
+            self.assertIn("--record-baseline", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(list(root.iterdir()), [])
 
 
 class DependencyTests(unittest.TestCase):

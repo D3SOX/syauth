@@ -31,7 +31,15 @@ feature-depth = 1
 version = 2
 # `db-path` and `db-urls` use defaults; the RustSec advisory DB on GitHub.
 yanked = "warn"
-ignore = []
+# The compatible Secret Service release still uses zbus 5. These three
+# informational advisories describe its type crates merging into zbus 6;
+# they report no vulnerability. Track removal in BUG-20261018-2106 when
+# secret-service releases its zbus 6 migration (upstream PR #122).
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant is required by secret-service 5; zbus 6 migration is unreleased" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names is required by secret-service 5; zbus 6 migration is unreleased" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is required by secret-service 5; zbus 6 migration is unreleased" },
+]
 
 # ---------------------------------------------------------------------------
 # Licenses.
@@ -83,6 +91,7 @@ deny = []
 #     (toml_edit 0.25, toml_datetime 1.1, winnow 1.0): we depend on
 #     toml 0.8, which pins toml_edit 0.22 / toml_datetime 0.6 /
 #     winnow 0.7.
+# syn 2 remains required by serde/UniFFI while async-trait needs syn 3.
 skip = [
     { crate = "block-buffer@0.10.4" },
     { crate = "cpufeatures@0.2.17" },
@@ -93,6 +102,7 @@ skip = [
     { crate = "hkdf@0.12.4" },
     { crate = "hmac@0.12.1" },
     { crate = "sha2@0.10.9" },
+    { crate = "syn@2.0.117" },
     { crate = "toml@0.5.11" },
     { crate = "toml_datetime@1.1.1+spec-1.1.0" },
     { crate = "toml_edit@0.25.11+spec-1.1.0" },

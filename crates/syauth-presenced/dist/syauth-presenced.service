@@ -12,7 +12,7 @@
 
 [Unit]
 Description=syauth phone-as-key presence daemon
-Documentation=https://github.com/sy/syauth specs/unlock-proximity/SPEC.md
+Documentation=https://github.com/dmytrogajewski/syauth/blob/master/specs/unlock-proximity/SPEC.md
 # Daemon binds ${XDG_RUNTIME_DIR}/syauth/auth.sock (S-002+) and
 # locks ${XDG_RUNTIME_DIR}/syauth/presenced.pid (S-001), so the
 # XDG_RUNTIME_DIR must exist before the unit starts.
@@ -45,7 +45,7 @@ NoNewPrivileges=yes
 # override --bonds-file / --keys-dir / the audit path via a drop-in.
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/syauth /var/log/syauth
+ReadWritePaths=/var/lib/syauth /var/log/syauth %t
 
 [Install]
 WantedBy=default.target

@@ -1,231 +1,90 @@
 # syauth
 
-Authenticate `sudo`, `login`, `gdm`, `swaylock`, or KDE screen unlock with
-your Android phone's fingerprint sensor. syauth works over Bluetooth without a
-cloud service. When the phone is unavailable, PAM continues to your configured
-password or FIDO2 authentication.
+<img src="assets/syauth.png" width="160" alt="syauth pixel cat paw holding a gold key">
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2024-orange)](Cargo.toml)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%2B%20Android-lightgrey)](#)
-[![Status](https://img.shields.io/badge/status-v0.1%20RC-yellow)](specs/syauth/ROADMAP.md)
+Approve Linux authentication on your Android phone with a fresh strong biometric. syauth connects a Linux PAM module, a desktop Bluetooth daemon, and an Android companion that signs each request through Android Keystore.
 
----
+[Documentation](https://dmytrogajewski.github.io/syauth/) · [Downloads](https://github.com/dmytrogajewski/syauth/releases/latest) · [How it works](https://dmytrogajewski.github.io/syauth/explanation/mechanics/) · [Security boundaries](https://dmytrogajewski.github.io/syauth/explanation/security/)
 
-## Why
+## Install
 
-Bluetooth proximity alone can be relayed. syauth requires fresh biometric
-authentication on the bonded phone for each request.
+On a supported Linux desktop:
 
-- The phone signs a random challenge nonce with Ed25519. The desktop verifies
-  the response against the public key pinned during pairing.
-- Android Keystore holds the signing key with
-  `setUserAuthenticationRequired(true)`. An unlocked phone still requires a
-  fresh biometric before signing.
-- The PAM module uses `sufficient`, so an unavailable phone leaves the remaining
-  authentication stack available. The default installer can add FIDO2; the
-  Arch/KDE guide preserves existing password and fingerprint authentication.
-
-The fingerprint prompt opens automatically when the phone receives a request.
-Dismissing it returns to the
-Authorize/Disallow screen. Authorize retries biometrics; Disallow declines.
-
----
-
-## How it works
-
-```
-┌─────────────────┐                 BLE/LESC                 ┌──────────────────┐
-│  Linux desktop  │                                          │  Android phone   │
-│                 │                                          │                  │
-│  pam_syauth.so  │ ── challenge (nonce, MAC) ─────────────► │  approve screen  │
-│       │         │                                          │        │         │
-│       ▼         │                                          │        ▼         │
-│ syauth-presenced│ ◄──── response (Ed25519 signature) ───── │  BiometricPrompt │
-│   (user daemon) │                                          │ + Keystore sign  │
-└─────────────────┘                                          └──────────────────┘
-        │                                                              ▲
-        │            verify(VerifyingKey, body, signature)             │
-        └──────────────────────────────────────────────────────────────┘
-                       (32-byte Ed25519 public key,
-                        pinned at pair time via LESC
-                        + 4-word app-level OOB confirm)
+```sh
+curl -fsSL https://dmytrogajewski.github.io/syauth/install.sh | sh
 ```
 
-- The desktop advertises a rotating session UUID derived from
-  `BLAKE3(bond_key || current_minute)`. The phone observes presence
-  via `CompanionDeviceManager` and opens a GATT client with
-  `autoConnect=true`.
-- Pairing requires BLE LE Secure Connections numeric comparison of the six-digit
-  code and a separate four-word app confirmation. The app confirmation also
-  checks the bond if an attacker bypasses system pairing.
-- The phone creates its Ed25519 private key in Keystore during pairing.
-  `BiometricPrompt` authorizes each `sign()` operation.
+The installer resolves the latest release, chooses the native package for your distribution and CPU, checks its SHA-256 checksum, and installs it with `apt`, `dnf`, `zypper`, or `pacman`. It requests `sudo` when needed. It leaves PAM configuration and service activation to you.
 
----
+Prefer to review the script first?
 
-## Quick start
+```sh
+curl -fsSLo install-syauth.sh https://dmytrogajewski.github.io/syauth/install.sh
+less install-syauth.sh
+sh install-syauth.sh --dry-run
+sh install-syauth.sh
+```
 
-On Arch Linux with Plasma 6.8 or newer, install the desktop integration from your
-normal user session:
+Release downloads include DEB, RPM, Arch Linux packages, and manual Linux archives for x86_64 and ARM64, plus a signed [Android APK](https://github.com/dmytrogajewski/syauth/releases/download/v0.1.0/syauth-0.1.0-android.apk), source archive, signing certificate, build metadata, and `SHA256SUMS`. See [installation and verification](https://dmytrogajewski.github.io/syauth/how-to/install/) for direct package commands and version-pinned downloads.
+
+Use Debian 12+, Ubuntu 24.04+, a current Fedora/openSUSE/Arch installation, or a compatible derivative, with glibc 2.36+, PAM, systemd user services, BlueZ, and a BLE adapter capable of advertising. The phone needs Android 13+ with a supported Ed25519 Keystore implementation and an enrolled strong biometric. The APK can install on older Android versions, but that does not establish signing-key support.
+
+## Use
+
+1. Install the desktop package and signed Android companion.
+2. Follow [storage and user-service setup](https://dmytrogajewski.github.io/syauth/how-to/install/#prepare-storage-and-the-user-service).
+3. Run `syauth pair`, complete numeric comparison on both devices, and confirm the bond with `syauth list`.
+4. Read the [PAM policy reference](https://dmytrogajewski.github.io/syauth/reference/configuration/#pam-policy), configure one service, and complete [your first unlock](https://dmytrogajewski.github.io/syauth/tutorials/first-unlock/).
+
+```sh
+syauth pair
+syauth list
+syauth doctor
+```
+
+Being nearby prepares the connection; each authentication still needs explicit approval and a strong biometric. Keep the existing recovery method available while configuring PAM. The [security guide](https://dmytrogajewski.github.io/syauth/explanation/security/) describes the current implementation's differences from the design specification, including bond derivation and desktop key storage.
+
+## Arch Linux and KDE Plasma from source
+
+On Arch Linux with Plasma 6.8 or newer, the source installer sets up the desktop integration from your normal user session:
 
 ```sh
 python3 scripts/install.py --dry-run
 python3 scripts/install.py
 ```
 
-The installer builds the desktop binaries, uses `sudo` for system files, and
-sets up masked sudo password input and live phone status on the lockscreen.
-It keeps backups and supports rollback. Add `--android PHONE_SERIAL` to also
-build and update the Android app over ADB. See
-[scripted installation](docs/getting-started.md#install-with-the-script) for
-prerequisites, pairing, phone-only reconnect settings, and rollback commands.
+It builds the desktop binaries, uses `sudo` for system files, and sets up masked sudo password input and live phone status on the lockscreen. It keeps backups and supports rollback. Add `--android PHONE_SERIAL` to also build and update the Android app over ADB. See [scripted installation](docs/getting-started.md#install-with-the-script) for prerequisites, pairing, phone-only reconnect settings, and rollback commands, and [sudo and KDE screen unlock](docs/pam.md) for the PAM configuration.
 
-For the tested Arch Linux / KDE Plasma / Pixel setup, follow:
+KDE can request the phone when you press Enter with an empty password field, using the optional `on_empty_password` PAM argument. Typing a password uses normal password authentication. For sudo, `terminal_prompt` accepts a password while phone approval waits; add `pwfeedback` to display asterisks.
 
-1. [Build, install, and pair](docs/getting-started.md), including the native
-   Android AAR, systemd runtime permissions, and phone-only Bluetooth recovery.
-2. [Enable sudo and KDE screen unlock](docs/pam.md), including backups, tests,
-   password fallback, and rollback.
+On restart the daemon can disconnect and reconnect one explicitly configured phone to recover a stale GATT subscription. Set `SYAUTH_RECONNECT_DEVICE` to that phone's bonded BlueZ identity address; when unset it disconnects no devices. See [Bluetooth configuration](docs/bluetooth.md).
 
-Pair with `syauth pair --timeout-secs 300` while the presence daemon is stopped.
-Compare both the six-digit system Bluetooth code and the four-word app phrase.
-Tapping Done on the phone updates Home and starts its connection service without
-restarting the app. Then enable the desktop daemon.
+## Documentation
 
-KDE can request the phone when you press Enter with an empty password field,
-using the optional `on_empty_password` PAM argument. Typing a password uses
-normal password authentication. For automatic requests with simultaneous
-password unlock, use the parallel `kde-fingerprint` service instead. Both
-configurations are in the [PAM guide](docs/pam.md).
+- [First unlock tutorial](https://dmytrogajewski.github.io/syauth/tutorials/first-unlock/)
+- [Install](https://dmytrogajewski.github.io/syauth/how-to/install/), [pair and revoke](https://dmytrogajewski.github.io/syauth/how-to/pair-and-revoke/), [troubleshoot](https://dmytrogajewski.github.io/syauth/how-to/troubleshoot/)
+- [CLI](https://dmytrogajewski.github.io/syauth/reference/cli/), [configuration](https://dmytrogajewski.github.io/syauth/reference/configuration/), [protocol](https://dmytrogajewski.github.io/syauth/reference/protocol/)
+- [Illustrated mechanics](https://dmytrogajewski.github.io/syauth/explanation/mechanics/) with animated pairing, discovery, and unlock
+- [Release builds and signing](https://dmytrogajewski.github.io/syauth/contributing/releases/)
 
-For sudo, `terminal_prompt` accepts a password while phone approval waits.
-Phone approval finishes without Enter and discards unfinished password input.
-Submitting a password dismisses the pending phone request. Add the PAM option
-`pwfeedback` to display asterisks in this combined prompt.
+## Development and contributing
 
-On Plasma 6.8, [live lockscreen status](docs/pam.md#live-phone-status-on-the-lockscreen)
-shows whether the phone is connected before you press Enter. The installer creates
-a user-owned shell package, preserves the password field, and supports rollback.
-
-The generic `install-pam` / `uninstall-pam` commands remain available for other
-PAM services. Review their output and the target distro's module paths before
-applying it; the per-user socket and KDE stack need the explicit setup
-above. The tested Arch module path is `/usr/lib/security/pam_syauth.so`.
-
-## Bluetooth recovery
-
-On restart the daemon can disconnect and reconnect one explicitly configured
-phone to recover a stale GATT subscription. Set `SYAUTH_RECONNECT_DEVICE` to that
-phone's bonded BlueZ identity address; when unset it disconnects no devices.
-Headphones and other Bluetooth devices remain connected. The phone refreshes its
-GATT cache on connection before discovering services. See
-[Bluetooth configuration](docs/bluetooth.md).
-
----
-
-## What's where
-
-```
-syauth/
-├── crates/
-│   ├── syauth-core/           # Wire format, BLAKE3 MAC, OOB derivation, fuzz harness
-│   ├── syauth-transport/      # bluer GATT peripheral + advertisement rotation
-│   ├── syauth-pam/            # pam_syauth.so — auth-stack entry point
-│   ├── syauth-cli/            # syauth(1): pair / list / revoke / status / install-pam / doctor
-│   ├── syauth-presenced/      # Long-running user daemon (systemd --user unit)
-│   └── syauth-mobile/         # UniFFI bindings consumed by the Android app
-├── syauth-android/            # Kotlin app (Compose UI, Keystore signing, CDM presence)
-├── specs/
-│   ├── syauth/SPEC.md         # Protocol, wire format, install layout
-│   ├── syauth/ROADMAP.md      # Items S-001..S-019 + JOURNEY closures
-│   └── threat/                # Formal threat model (T-001..T-016)
-├── docs/                      # Setup guides, security overview, known gaps
-└── scripts/                   # e2e-unlock.sh latency benchmark, build helpers
-```
-
----
-
-## Configuration cheatsheet
+The Rust workspace is under `crates/`; the Android app is under `syauth-android/`. Build from source with a toolchain compatible with the committed `Cargo.lock` and development packages for D-Bus, PAM, and Bluetooth:
 
 ```sh
-# Daemon
-systemctl --user status syauth-presenced
-journalctl --user -u syauth-presenced -f
-syauth status                     # adapter + bonded peers + last unlock
-syauth status --json              # same data, machine-readable
-
-# Bonds
-syauth list                       # TSV: id, name, status, created_at
-syauth revoke --id <peer_id>      # idempotent; audit trail preserved
-syauth pair --force               # overwrite an existing bond record
-
-# Health
-syauth doctor                     # one OK/WARN/FAIL line per probe
-syauth doctor --json              # typed JSON for tooling
+make build
+make test
+make lint
+python3 -m unittest discover -s tests -p 'test_release_*.py'
+python3 -m unittest discover -s tests -p test_installer.py
 ```
 
-Environment overrides for the daemon are in the systemd unit
-(`~/.config/systemd/user/syauth-presenced.service`); see
-`docs/known-gaps.md` for an audit-trail of every spec deviation.
+See [documentation development](docs/contributing/documentation.md), [release development](docs/contributing/releases.md), and [AGENTS.md](AGENTS.md) for contributor contracts. Open an [issue](https://github.com/dmytrogajewski/syauth/issues) with reproduction steps and sanitized diagnostics, or a pull request with the user-visible change and relevant test evidence. Avoid posting bond files, private keys, or unreviewed logs.
 
----
+## Maintainers
 
-## Security model
-
-A formal threat model lives in
-[`specs/threat/THREAT-2026-05-15.md`](specs/threat/THREAT-2026-05-15.md);
-the short version:
-
-- T-001..T-006 (link-layer attacks): covered by LESC + per-unlock
-  signing.
-- T-007 (compromised phone): bound by the Keystore's
-  `setUserAuthenticationRequired(true)`, a stolen unlocked phone
-  cannot sign without a fresh biometric.
-- T-014 (biometric coercion / phishing prompt): hostname is
-  sanitized + truncated on the Approve screen so a malicious peer
-  can't render a multi-line phishing prompt.
-- T-016 (compromised desktop): in scope for v0.2; v0.1 trusts
-  the desktop's `bond_key`.
-
-If the phone is unavailable, `pam_syauth` returns `PAM_AUTHINFO_UNAVAIL`
-and PAM continues to the configured FIDO2 or password modules. A failed
-phone response does not grant authentication.
-
----
-
-## Roadmap
-
-- v0.1.0 (RC, current), five auth surfaces (sudo, login, su,
-  gdm-password, swaylock), real-device LESC, Keystore-resident
-  Ed25519, FIDO2 fallback installed in one CLI command.
-- v0.2, F-Droid + Play Store delivery, multi-host bonds,
-  bond-revocation push from desktop, daemon presence on the system
-  bus.
-- v0.3, pre-boot unlock (LUKS/cryptsetup), CompanionDeviceService
-  in-process re-discovery so the daemon kick is no longer needed.
-
-Tracking is in
-[`specs/syauth/ROADMAP.md`](specs/syauth/ROADMAP.md). Sibling
-roadmap for the `sy` desktop integration is at
-[`~/sources/sy/specs/roadmaps/syauth-integration/ROADMAP.md`](https://github.com/dmytrogajewski/sy/blob/master/specs/roadmaps/syauth-integration/ROADMAP.md).
-
----
-
-## Contributing
-
-PRs welcome. Run the checks below and document user-visible behavior:
-
-- `cargo clippy --all-targets -- -D warnings` must pass.
-- Every new module ships with tests before behaviour.
-- No `TODO` / `FIXME` / `unimplemented!()` in committed code, the
-  pre-commit hook blocks it.
-- Open SPEC deviations live in
-  [`docs/known-gaps.md`](docs/known-gaps.md) with a numbered
-  `DEV-NNN` audit row.
-
----
+Maintained by [dmytrogajewski](https://github.com/dmytrogajewski) and contributors.
 
 ## License
 
-[MIT](LICENSE). Copyright © 2026 syauth contributors.
+[MIT](LICENSE).

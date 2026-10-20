@@ -10,7 +10,7 @@
 // specs/journeys/JOURNEY-S-015-android-scaffold.md):
 //   - namespace + applicationId -> com.sy.syauth.android
 //   - AAR path -> files("../../crates/syauth-mobile/target/syauth_mobile.aar")
-//   - signingConfigs and release-build minify dropped (S-015 is debug-only)
+//   - release APKs are signed by scripts/build-release-apk.sh after alignment
 //   - vectorDrawables block dropped (no drawables yet)
 //   - CameraX / ZXing / security-crypto dropped (none used by syauth;
 //     CameraX/ZXing are prrr-specific QR scanner deps)
@@ -45,6 +45,16 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseVersion = providers.environmentVariable("VERSION").orElse("0.1.0").get()
+require(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)").matches(releaseVersion)) {
+    "VERSION must be a numeric major.minor.patch"
+}
+val versionParts = releaseVersion.split('.').map { it.toInt() }
+require(versionParts.all { it <= 999 }) { "Version components must not exceed 999" }
+val releaseVersionCode = providers.environmentVariable("ANDROID_VERSION_CODE").orNull?.toInt()
+    ?: (versionParts[0] * 1_000_000 + versionParts[1] * 1_000 + versionParts[2])
+require(releaseVersionCode in 1..2_100_000_000) { "ANDROID_VERSION_CODE is out of range" }
+
 android {
     namespace = "com.sy.syauth.android"
     compileSdk = 34
@@ -53,8 +63,8 @@ android {
         applicationId = "com.sy.syauth.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersion
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -72,10 +82,8 @@ android {
 
     buildTypes {
         release {
-            // S-015 is the debug-only hello-world; release signing + R8 land
-            // once we have a screen worth shipping. Per AGENTS.md, we leave
-            // the block declared but minimal so a future agent doesn't have
-            // to invent the structure from scratch.
+            // Native UniFFI/JNA entry points retain their generated names.
+            // Signing credentials stay outside Gradle and its build cache.
             isMinifyEnabled = false
         }
     }

@@ -21,8 +21,9 @@
 //! Journey: specs/journeys/JOURNEY-S-011-pairing-desktop.md
 
 use std::{
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 
@@ -85,6 +86,20 @@ pub const PAM_BOND_KEY_DIR_NAME: &str = "keys";
 /// Extension `pam_syauth` expects on the per-peer bond_key file.
 /// Matches `crates/syauth-pam/src/auth.rs::BOND_KEY_FILE_EXT`.
 pub const PAM_BOND_KEY_FILE_EXT: &str = ".bin";
+
+/// Sentinel for [`LescOutcome::numeric_code`] when BlueZ never asked the
+/// desktop's agent to confirm a numeric comparison (for example the peer
+/// re-used an existing link key). Distinct from a real code, which is
+/// always `1..=999999`.
+pub const NUMERIC_CODE_NOT_OBSERVED: u32 = 0;
+
+/// How long the desktop waits for the operator's keystroke at the OS
+/// numeric-comparison prompt before answering BlueZ "reject".
+///
+/// Deliberately shorter than BlueZ's 30 s SMP timeout (same rationale as
+/// `pair_backend::PAIR_IPC_DECISION_TIMEOUT`): the attempt must end because
+/// the operator declined, not because the stack gave up on us.
+pub const OS_CONFIRM_DECISION_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// File mode `pam_syauth` requires on `<peer_id>.bin`. The PAM module
 /// refuses the file (returns `secret-not-found`) if any group/other
@@ -201,6 +216,148 @@ pub struct AdapterInfo {
     pub supports_lesc: bool,
 }
 
+/// Which operator-facing surface answers BlueZ's `RequestConfirmation` for
+/// the LESC numeric comparison (SPEC §3.2 D5: the code must be confirmed on
+/// both ends, so the desktop side needs an answer path of its own).
+///
+/// BUG-20261018-0120: the choice is resolved by the pair flow itself rather
+/// than by whoever constructs the backend, so no caller can reach the radio
+/// without an answer path being installed first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmSource {
+    /// Print the 6-digit code and read `y`/`N` from the operator's terminal.
+    Stdio,
+    /// Answer accept without waiting — the operator opted out of the
+    /// desktop prompt with `--yes` (or the hidden `--scripted-oob` harness
+    /// flag). The code is still printed so the run is auditable.
+    AutoAccept,
+    /// Hand the code to the waybar applet and wait for the click.
+    Waybar,
+}
+
+impl ConfirmSource {
+    /// Resolve the answer surface from the operator's flags. `--yes` and
+    /// `--scripted-oob` both auto-accept; `--waybar` routes to the bar
+    /// applet; everything else prompts on stdin.
+    #[must_use]
+    pub fn from_opts(opts: &PairOpts) -> Self {
+        if opts.yes || opts.scripted_oob.is_some() {
+            Self::AutoAccept
+        } else if opts.waybar {
+            Self::Waybar
+        } else {
+            Self::Stdio
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Operator keystroke queue.
+// ---------------------------------------------------------------------------
+
+/// Line-buffered queue of the operator's keystrokes for one pair run.
+///
+/// A pair run asks the operator two questions — the OS numeric comparison
+/// (`y`/`N` against the code BlueZ reports) and the app-level OOB code —
+/// from two different execution contexts: the BlueZ agent's blocking task
+/// and the flow's own prompt. `io::stdin()` cannot serve both: it is a
+/// process-wide lock and the flow holds it for the whole run, so a second
+/// reader blocks indefinitely (BUG-20261018-0120: the agent never answered
+/// BlueZ and the phone's pairing attempt died with no message). Exactly one
+/// thread owns the stdin handle and pushes lines here; both consumers block
+/// on this queue instead.
+///
+/// An early keystroke is not lost: the OS prompt consumes it first, so
+/// "type `y` as soon as the code matches on either screen" works.
+#[derive(Clone)]
+pub struct OperatorLines {
+    tx: mpsc::Sender<String>,
+    rx: Arc<Mutex<mpsc::Receiver<String>>>,
+}
+
+impl Default for OperatorLines {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            tx,
+            rx: Arc::new(Mutex::new(rx)),
+        }
+    }
+}
+
+impl OperatorLines {
+    /// Deliver one operator line (newline stripped) and wake a consumer.
+    pub fn push(&self, line: impl Into<String>) {
+        let _ = self.tx.send(line.into());
+    }
+
+    /// Pop the oldest line, waiting up to `timeout` (`None` = until one
+    /// arrives). `None` means "no line available": timed out, or the stdin
+    /// reader finished.
+    #[must_use]
+    pub fn take_line(&self, timeout: Option<Duration>) -> Option<String> {
+        let guard = self.rx.lock().ok()?;
+        match timeout {
+            Some(wait) => guard.recv_timeout(wait).ok(),
+            None => guard.recv().ok(),
+        }
+    }
+
+    /// `Read`-shaped view for the flow's prompt reader, so
+    /// [`run_pair_with_io`]'s injected `BufRead` contract keeps working.
+    #[must_use]
+    pub fn reader(&self) -> OperatorLineReader {
+        OperatorLineReader {
+            lines: self.clone(),
+            pending: Vec::new(),
+        }
+    }
+
+    /// Spawn the one thread that owns the process stdin and forwards every
+    /// line into this queue. The lock on `io::stdin()` is taken per line and
+    /// released between lines, so nothing else in the process ever needs it.
+    pub fn spawn_stdin_reader(self) {
+        let spawn = std::thread::Builder::new().name("syauth-stdin".to_owned()).spawn(move || {
+            let stdin = io::stdin();
+            loop {
+                let mut line = String::new();
+                match stdin.lock().read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        self.push(line.trim_end_matches(['\r', '\n']));
+                    }
+                }
+            }
+        });
+        debug_assert!(spawn.is_ok(), "stdin reader thread must spawn");
+    }
+}
+
+/// [`Read`] view over an [`OperatorLines`] queue; feeds the flow's OOB prompt.
+pub struct OperatorLineReader {
+    lines: OperatorLines,
+    pending: Vec<u8>,
+}
+
+impl Read for OperatorLineReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.pending.is_empty() {
+            match self.lines.take_line(None) {
+                Some(line) => {
+                    self.pending = line.into_bytes();
+                    self.pending.push(b'\n');
+                }
+                // Queue closed: report EOF so a blocking prompt unwinds.
+                None => return Ok(0),
+            }
+        }
+        let take = self.pending.len().min(buf.len());
+        buf[..take].copy_from_slice(&self.pending[..take]);
+        self.pending.drain(..take);
+        Ok(take)
+    }
+}
+
 /// Abstraction over the `bluer` calls the pair flow makes. The mock impl in
 /// the integration test implements this without touching a real radio.
 #[async_trait]
@@ -223,6 +380,26 @@ pub trait PairBackend: Send + Sync {
     /// Drive LESC numeric comparison with `peer`. In production this wraps
     /// `bluer::Device::pair()` with MITM protection required.
     async fn initiate_lesc_with_peer(&self, peer: &PairCandidate) -> Result<LescOutcome, PairError>;
+
+    /// Install the operator-facing surface that answers BlueZ's
+    /// `RequestConfirmation` for the LESC numeric comparison.
+    ///
+    /// Deliberately required (no default body): the BlueZ agent's fallback
+    /// when no handler exists is to *reject* the comparison, and
+    /// BUG-20261018-0120 showed that a forgotten call site is
+    /// indistinguishable from a broken radio. Every implementation must
+    /// state what it does with the operator's choice.
+    fn install_os_confirm(&self, source: ConfirmSource);
+
+    /// The queue this backend's `ConfirmSource::Stdio` surface reads the
+    /// operator's keystrokes from. [`run_pair`] feeds it from the process
+    /// stdin, so the OS prompt and the OOB prompt share one keystroke stream.
+    ///
+    /// Test doubles that never talk to a radio get an unconnected queue:
+    /// nothing reads from it, which is why a default body is safe here.
+    fn operator_lines(&self) -> OperatorLines {
+        OperatorLines::default()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -627,6 +804,12 @@ pub async fn run_pair_with_io(
         });
     }
 
+    // The answer path for the OS numeric comparison has to exist before
+    // anything touches the radio: the agent rejects by default, and an
+    // unanswered numeric comparison looks to the operator exactly like
+    // "the phone refuses to pair" (BUG-20261018-0120).
+    backend.install_os_confirm(ConfirmSource::from_opts(opts));
+
     // Phase 1: Scanning. The state machine reads top-to-bottom; each
     // transition is the local variable being shadowed (not reassigned),
     // which keeps clippy/unused-assignments happy and makes the
@@ -653,7 +836,11 @@ pub async fn run_pair_with_io(
             });
         }
     };
-    writeln!(writer, "BT numeric code: {:06}   confirm on both devices", outcome.numeric_code)?;
+    if outcome.numeric_code == NUMERIC_CODE_NOT_OBSERVED {
+        writeln!(writer, "BT numeric comparison confirmed (code not reported by the agent)")?;
+    } else {
+        writeln!(writer, "BT numeric code: {:06}   confirm on both devices", outcome.numeric_code)?;
+    }
 
     // Phase 3: AwaitingOobConfirmation.
     let code = oob_code_for_bond(&outcome.bond_key);
@@ -716,8 +903,12 @@ pub async fn run_pair_with_io(
 ///
 /// Returns [`PairError`] for every typed failure of the pair flow.
 pub async fn run_pair(opts: &PairOpts, backend: &dyn PairBackend) -> Result<PairingPhase, PairError> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
+    // One thread owns `io::stdin()` for the whole run and feeds the queue
+    // that both prompts read (BUG-20261018-0120: locking stdin here instead
+    // starves the BlueZ agent's prompt, which then never answers BlueZ).
+    let lines = backend.operator_lines();
+    lines.clone().spawn_stdin_reader();
+    let mut reader = io::BufReader::new(lines.reader());
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     run_pair_with_io(opts, backend, &mut reader, &mut writer).await
@@ -914,6 +1105,9 @@ mod tests {
     const SCRIPTED_TEST_NUMERIC_CODE: u32 = 123_456;
     /// Pinned scripted-oob hex argument. Anything ≥ 2 hex chars is valid.
     const SCRIPTED_TEST_OOB_HEX: &str = "deadbeef";
+    /// Wait window for the queue tests: long enough to outlive scheduler
+    /// jitter, short enough that a missing keystroke fails fast.
+    const TEST_LINE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
 
     #[async_trait]
     impl PairBackend for ScriptedTestBackend {
@@ -936,6 +1130,61 @@ mod tests {
                 numeric_code: SCRIPTED_TEST_NUMERIC_CODE,
             })
         }
+
+        /// No radio behind this backend, so the operator surface is recorded
+        /// nowhere; the suite that pins *which* surface gets installed is
+        /// `tests/pair_flow.rs`.
+        fn install_os_confirm(&self, _source: ConfirmSource) {}
+    }
+
+    /// One stdin keystroke stream has to serve two prompts: the OS numeric
+    /// comparison (read by the BlueZ agent) and the app-level OOB `[y/N]`
+    /// (read by the flow). BUG-20261018-0120: both used `io::stdin()`, whose
+    /// process-wide lock the flow holds for the whole run, so the agent's
+    /// prompt could never be answered.
+    #[test]
+    fn operator_lines_serve_the_agent_prompt_and_the_flow_prompt_independently() {
+        let lines = OperatorLines::default();
+        lines.push("y");
+        lines.push("yes");
+
+        // The BlueZ agent's consumer.
+        let os_answer = lines.take_line(Some(TEST_LINE_TIMEOUT)).expect("agent prompt answer");
+        // The flow's consumer, through the `Read` view `run_pair` installs.
+        let mut reader = io::BufReader::new(lines.reader());
+        let mut oob_answer = String::new();
+        reader.read_line(&mut oob_answer).expect("flow prompt answer");
+
+        assert_eq!(os_answer, "y");
+        assert_eq!(oob_answer, "yes\n", "the Read view must keep line framing for BufRead");
+    }
+
+    #[test]
+    fn operator_lines_take_line_reports_no_line_after_the_timeout() {
+        let lines = OperatorLines::default();
+
+        assert!(lines.take_line(Some(TEST_LINE_TIMEOUT)).is_none(), "no keystroke must arrive here");
+    }
+
+    /// A line longer than the caller's buffer must not lose bytes: `BufRead`
+    /// refills from the same reader until it sees the newline.
+    #[test]
+    fn operator_line_reader_keeps_bytes_that_do_not_fit_one_read() {
+        let lines = OperatorLines::default();
+        lines.push("yes");
+        let mut reader = lines.reader();
+
+        let mut small = [0u8; 1];
+        let mut gathered = String::new();
+        for _ in 0..4 {
+            let read = reader.read(&mut small).expect("read must succeed");
+            if read == 0 {
+                break;
+            }
+            gathered.push(small[0] as char);
+        }
+
+        assert_eq!(gathered, "yes\n", "byte-at-a-time reads must reconstruct the line");
     }
 
     #[tokio::test]

@@ -280,7 +280,7 @@ endif
 # Make invocation self-contained.
 
 PACKAGE_VERSION ?= 0.1.0
-RPM_RELEASE     ?= 1
+RPM_RELEASE     ?= 3
 DEB_REVISION    ?= 1
 DIST_PREFIX     ?= syauth-$(PACKAGE_VERSION)
 DIST_TARBALL    ?= target/$(DIST_PREFIX).tar.gz
@@ -323,6 +323,10 @@ rpm:
 	echo "==> rpm: artifact at $(RPM_FILE)"
 
 ## deb: Build the Debian deb under pbuilder. Skips cleanly when pbuilder or dpkg-buildpackage is absent.
+.PHONY: rpm-native
+rpm-native:
+	@bash scripts/build-rpm-native.sh
+
 .PHONY: deb
 deb:
 	@set -eu; \

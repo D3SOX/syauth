@@ -22,12 +22,13 @@ use syauth_cli::{
     install_pam::{self, InstallOpts, InstallOutcome},
     install_presenced::{self, InstallPresencedOpts, InstallPresencedOutcome},
     list::run_list,
-    pair::{ListOpts, PairOpts, run_pair_with_io},
-    pair_backend::{BluerPairBackend, make_auto_accept_confirm_handler, make_stdio_confirm_handler, make_waybar_confirm_handler},
+    pair::{ListOpts, PairOpts, run_pair},
+    pair_backend::BluerPairBackend,
     revoke::{RevokeOpts, run_revoke},
     status::{StatusOpts, run_status},
     uninstall_pam::{self, UninstallOpts, UninstallOutcome},
 };
+use syauth_core::SigningKey;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -41,9 +42,15 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// Length of the Ed25519 secret seed behind the per-invocation host pair
+/// key (`syauth_core::SigningKey::from_bytes`).
+const SIGNING_KEY_SECRET_BYTES: usize = 32;
+
 #[derive(Debug, Subcommand)]
 enum Cmd {
-    /// Pair a phone over BLE with numeric comparison and app-level OOB confirmation.
+    /// Pair a phone with this desktop. Runs LE Secure Connections numeric
+    /// comparison followed by the app-level OOB confirmation, then writes
+    /// the bond on `[y/N]` = Y.
     Pair(PairOpts),
     /// Print the bonds file as TSV: id\tname\tstatus\tcreated_at.
     List(ListOpts),
@@ -110,24 +117,19 @@ async fn dispatch(cli: Cli) -> Result<()> {
     }
 }
 
+/// Drive the pair flow against the real adapter.
+///
+/// The host's pair-time key is generated per invocation and never
+/// persisted: the phone uses it only as HKDF input, and the derived
+/// `bond_key` is committed to disk once at pair time. This mirrors
+/// `syauth-presenced`, which likewise keeps a non-persisted host pubkey
+/// for the pair service.
 async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
-    let mut seed = [0u8; 32];
-    rand::RngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut seed)?;
-    let host_key = syauth_core::SigningKey::from_bytes(&seed);
-    let backend = BluerPairBackend::new(&opts.adapter, &host_key);
-    let handler = if opts.yes {
-        make_auto_accept_confirm_handler()
-    } else if opts.waybar {
-        make_waybar_confirm_handler()
-    } else {
-        make_stdio_confirm_handler()
-    };
-    backend.install_confirm_handler(handler);
-    // The BlueZ confirmation callback also uses stdio on a blocking worker.
-    // Leave the handles unlocked while awaiting its numeric comparison.
-    let mut reader = io::BufReader::new(io::stdin());
-    let mut writer = io::stdout();
-    run_pair_with_io(opts, &backend, &mut reader, &mut writer).await?;
+    let mut secret = [0u8; SIGNING_KEY_SECRET_BYTES];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut secret);
+    let signing_key = SigningKey::from_bytes(&secret);
+    let backend = BluerPairBackend::new(&opts.adapter, &signing_key);
+    run_pair(opts, &backend).await?;
     Ok(())
 }
 

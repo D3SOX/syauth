@@ -31,6 +31,8 @@
 //! refactored by S-003 — it remains byte-identical until S-009 deletes
 //! it. The library API is a strict superset.
 
+mod notification;
+
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -39,7 +41,7 @@ use bluer::{
     adv::Advertisement,
     agent::{Agent, AgentHandle, RequestConfirmation},
     gatt::{
-        CharacteristicReader, CharacteristicWriter,
+        CharacteristicReader,
         local::{
             Application, ApplicationHandle, Characteristic, CharacteristicControlEvent, CharacteristicNotify, CharacteristicNotifyMethod,
             CharacteristicRead, CharacteristicWrite, CharacteristicWriteMethod, Service, characteristic_control,
@@ -47,6 +49,7 @@ use bluer::{
     },
 };
 use futures::{FutureExt, StreamExt};
+use notification::{DbusNotifier, NotificationChannel};
 use thiserror::Error;
 use tokio::{
     io::AsyncReadExt,
@@ -62,6 +65,18 @@ use crate::{
     bluez_advertise::{ADVERTISE_DISCOVERABLE, ADVERTISE_LOCAL_NAME},
     error::TransportError,
 };
+
+fn peer_notify_method(tx: mpsc::Sender<DbusNotifier>) -> CharacteristicNotifyMethod {
+    // BlueZ can retain CCCD state after an acquired notification FD closes.
+    // Standard Value notifications avoid coupling that state to a dead FD.
+    CharacteristicNotifyMethod::Fun(Box::new(move |notifier| {
+        let tx = tx.clone();
+        async move {
+            let _ = tx.send(DbusNotifier::new(notifier)).await;
+        }
+        .boxed()
+    }))
+}
 
 /// Per-peer mpsc depth for incoming response frames. Sized to absorb
 /// short bursts of malformed writes without back-pressuring the GATT
@@ -272,16 +287,10 @@ struct PeerCharSet {
     /// loop when the phone subscribes to the challenge characteristic
     /// (CCCD write). `notify_challenge` reads this slot and writes the
     /// frame bytes. `None` until the phone subscribes.
-    notifier_slot: Arc<Mutex<Option<CharacteristicWriter>>>,
+    notifier_slot: Arc<NotificationChannel>,
     /// JoinHandle for the per-peer control loop (challenge subscribe +
     /// response write reader). Aborted on `remove_peer`.
     task_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Bond key for this peer. Cached so we can rebuild the GATT
-    /// application registration on dead-writer detection without
-    /// having to plumb the bond store all the way down. The bond
-    /// key is the input to `peer_service_uuid(bond_key)`, which the
-    /// rebuild path needs to construct the service tree.
-    bond_key: BondKey,
 }
 
 /// Per-peer response buffer depth for the `PersistentPeripheral`'s
@@ -325,8 +334,7 @@ pub struct PersistentPeripheral {
     /// time out with `HCI_ERR_AUTH_FAILURE`). The callback
     /// auto-accepts: the user's trust signal is the CDM-picker
     /// selection on the phone, not a desktop-side prompt.
-    #[allow(dead_code)]
-    agent_handle: AgentHandle,
+    _agent_handle: AgentHandle,
     /// Host's pubkey, served on the pair-mode characteristic the
     /// phone reads at pair time. 32 random bytes generated at
     /// startup; the desktop side of the pair protocol uses it only
@@ -446,7 +454,7 @@ impl PersistentPeripheral {
             adapter,
             app_handle: Mutex::new(None),
             adv_slot: Mutex::new(None),
-            agent_handle,
+            _agent_handle: agent_handle,
             host_pubkey,
             pair_event_tx,
             pair_watcher: Mutex::new(None),
@@ -716,14 +724,14 @@ impl PersistentPeripheral {
         bond_key: &BondKey,
     ) -> Result<
         (
-            Arc<Mutex<Option<CharacteristicWriter>>>,
+            Arc<NotificationChannel>,
             mpsc::Sender<Vec<u8>>,
             mpsc::Receiver<Vec<u8>>,
             JoinHandle<()>,
         ),
         PeripheralError,
     > {
-        let (mut chal_control, chal_handle) = characteristic_control();
+        let (notify_tx, mut notify_rx) = mpsc::channel(RESPONSE_BUFFER_DEPTH);
         let (mut resp_control, resp_handle) = characteristic_control();
         let service_uuid = peer_service_uuid(bond_key);
         let app = Application {
@@ -735,10 +743,9 @@ impl PersistentPeripheral {
                         uuid: SYAUTH_CHALLENGE_CHAR_UUID,
                         notify: Some(CharacteristicNotify {
                             notify: true,
-                            method: CharacteristicNotifyMethod::Io,
+                            method: peer_notify_method(notify_tx),
                             ..Default::default()
                         }),
-                        control_handle: chal_handle,
                         ..Default::default()
                     },
                     Characteristic {
@@ -790,7 +797,7 @@ impl PersistentPeripheral {
             );
         }
 
-        let notifier_slot: Arc<Mutex<Option<CharacteristicWriter>>> = Arc::new(Mutex::new(None));
+        let notifier_slot = Arc::new(NotificationChannel::default());
         let (response_tx, response_rx) = mpsc::channel::<Vec<u8>>(RESPONSE_BUFFER_DEPTH);
         let notifier_slot_for_task = notifier_slot.clone();
         let response_tx_for_task = response_tx.clone();
@@ -798,15 +805,15 @@ impl PersistentPeripheral {
             let mut reader_opt: Option<CharacteristicReader> = None;
             loop {
                 tokio::select! {
+                    result = notifier_slot_for_task.wait_closed() => {
+                        tracing::info!(target: "syauth_transport", error = ?result.err(), "notification session closed; awaiting re-subscribe");
+                    }
                     // Phone subscribes / unsubscribes to challenge notifications.
-                    chal_evt = chal_control.next() => {
+                    chal_evt = notify_rx.recv() => {
                         match chal_evt {
-                            Some(CharacteristicControlEvent::Notify(writer)) => {
-                                tracing::info!(target: "syauth_transport", "chal_control: Notify event — phone subscribed");
-                                *notifier_slot_for_task.lock().await = Some(writer);
-                            }
-                            Some(CharacteristicControlEvent::Write(_)) => {
-                                tracing::warn!(target: "syauth_transport", "chal_control: unexpected Write event");
+                            Some(writer) => {
+                                tracing::info!(target: "syauth_transport", "phone subscribed via standard notifications");
+                                notifier_slot_for_task.install(Arc::new(writer)).await;
                             }
                             None => {
                                 tracing::warn!(target: "syauth_transport", "chal_control: stream ended, task exiting");
@@ -863,93 +870,6 @@ impl PersistentPeripheral {
         });
         Ok((notifier_slot, response_tx, response_rx, task))
     }
-
-    /// Rebuild the GATT application registration for a single peer.
-    ///
-    /// Why this is needed: a `Device::disconnect()` (our
-    /// `kick_connected_peers`) drops the LE link but **does not** force
-    /// BlueZ to emit a fresh `CharacteristicControlEvent::Notify` when
-    /// the phone re-subscribes against the same `Application` object.
-    /// BlueZ remembers the per-characteristic subscription state across
-    /// link transitions, so a re-subscribe is silently merged into the
-    /// existing one. The `CharacteristicWriter` cached in
-    /// `notifier_slot` stays dead forever, and `notify_challenge`
-    /// audits `transport-error` until the daemon is restarted.
-    ///
-    /// The only kick that reliably triggers a fresh Notify event is
-    /// unregistering the application entirely and re-registering it,
-    /// which discards BlueZ's subscription state. We do that here:
-    /// abort the old chal_control/resp_control task, drop the old
-    /// `ApplicationHandle`, kick any LE link so the phone reconnects
-    /// against the fresh application, then `build_and_register_peer`
-    /// with the cached bond key and swap the new state into the
-    /// `PeerCharSet`.
-    ///
-    /// Lock ordering: we never hold a `notifier_slot` lock across this
-    /// call — `notify_challenge` releases it before invoking us. We
-    /// take the `peers` lock briefly to read `bond_key`, drop it,
-    /// touch `app_handle`, then take `peers` again to swap the entry.
-    async fn rebuild_peer_registration(&self, peer_id: &str) -> Result<(), PeripheralError> {
-        let bond_key: BondKey = {
-            let peers = self.peers.lock().await;
-            let entry = peers.get(peer_id).ok_or_else(|| PeripheralError::UnknownPeer {
-                peer_id: peer_id.to_owned(),
-            })?;
-            entry.bond_key
-        };
-        // Abort the old per-peer control task. After this the previous
-        // chal_control / resp_control characteristic_control streams
-        // are owned by a dead task; dropping the `ApplicationHandle`
-        // below will close them on the BlueZ side.
-        {
-            let peers = self.peers.lock().await;
-            if let Some(entry) = peers.get(peer_id)
-                && let Some(handle) = entry.task_handle.lock().await.take()
-            {
-                handle.abort();
-            }
-        }
-        // Drop the old `ApplicationHandle`. bluer issues
-        // `UnregisterApplication` on Drop, which prompts BlueZ to
-        // forget every CCCD subscription bound to that application.
-        {
-            let mut slot = self.app_handle.lock().await;
-            *slot = None;
-        }
-        // Kick any LE link so the phone reconnects against the fresh
-        // application. Without this the phone's GATT cache still
-        // points at the old application's characteristic handles —
-        // the phone will write CCCD on a handle that no longer
-        // belongs to anything, and BlueZ silently drops the write.
-        if let Err(err) = self.kick_connected_peers().await {
-            tracing::warn!(
-                target: "syauth_transport",
-                error = %err,
-                "rebuild_peer_registration: kick_connected_peers failed"
-            );
-        }
-        // Build + register a fresh application for this peer.
-        let (notifier_slot, response_tx, response_rx, task) = self.build_and_register_peer(&bond_key).await?;
-        // Swap the new state into the peer entry. `bond_key` is
-        // copied (it is a `[u8; N]`) so the new entry stays
-        // self-contained.
-        {
-            let mut peers = self.peers.lock().await;
-            if let Some(entry) = peers.get_mut(peer_id) {
-                *entry.notifier_slot.lock().await = None;
-                entry.notifier_slot = notifier_slot;
-                entry.response_rx = Arc::new(Mutex::new(response_rx));
-                entry._response_tx = response_tx;
-                *entry.task_handle.lock().await = Some(task);
-            }
-        }
-        tracing::info!(
-            target: "syauth_transport",
-            peer_id = %peer_id,
-            "rebuild_peer_registration: fresh GATT application registered, awaiting re-subscribe"
-        );
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -957,8 +877,7 @@ impl Peripheral for PersistentPeripheral {
     async fn is_connected(&self, peer_id: &str) -> bool {
         let peers = self.peers.lock().await;
         let Some(peer) = peers.get(peer_id) else { return false };
-        let slot = peer.notifier_slot.lock().await;
-        slot.as_ref().is_some_and(|writer| writer.is_closed().is_ok_and(|closed| !closed))
+        peer.notifier_slot.is_subscribed().await
     }
     async fn add_peer(&self, peer_id: &str, bond_key: &BondKey) -> Result<(), PeripheralError> {
         let peers = self.peers.lock().await;
@@ -983,7 +902,6 @@ impl Peripheral for PersistentPeripheral {
                 _response_tx: response_tx,
                 notifier_slot,
                 task_handle: Mutex::new(Some(task)),
-                bond_key: *bond_key,
             },
         );
         Ok(())
@@ -1035,51 +953,20 @@ impl Peripheral for PersistentPeripheral {
             while rx.try_recv().is_ok() {}
         }
         drop(peers);
-        let mut slot = notifier_slot.lock().await;
-        let Some(writer) = slot.as_mut() else {
-            return Err(PeripheralError::NotSubscribed {
-                peer_id: peer_id.to_owned(),
-            });
-        };
-        use tokio::io::AsyncWriteExt;
         tracing::info!(target: "syauth_transport", peer_id=%peer_id, bytes=frame.len(), "notify_challenge: writing frame");
-        match writer.write_all(frame).await {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                // The cached BlueZ CharacteristicWriter is dead — the phone's
-                // CCCD subscription went stale (out-of-range, suspend/resume,
-                // app restart, radio glitch). Field testing showed that
-                // simply Device::disconnect()ing the LE link is NOT enough:
-                // BlueZ keeps the per-characteristic subscription state across
-                // link transitions, so when the phone reconnects and writes
-                // CCCD again, BlueZ silently merges that into the existing
-                // subscription and never emits a fresh
-                // `CharacteristicControlEvent::Notify` to our application.
-                // The cached writer in `notifier_slot` stays dead forever
-                // until the daemon restarts.
-                //
-                // Real recovery: unregister and re-register the entire
-                // per-peer application via `rebuild_peer_registration`.
-                // bluer issues `UnregisterApplication` on `ApplicationHandle`
-                // drop, which discards BlueZ's subscription state. The fresh
-                // registration's chal_control stream then emits `Notify` the
-                // first time the (kicked) phone re-subscribes against it.
-                // The caller retries the same challenge while the phone
-                // resubscribes, within the original authentication deadline.
-                tracing::warn!(
-                    target: "syauth_transport",
-                    peer_id = %peer_id,
-                    error = %err,
-                    "notify_challenge: cached writer dead — rebuilding GATT application"
-                );
-                *slot = None;
-                drop(slot);
-                self.rebuild_peer_registration(peer_id).await?;
-                Err(PeripheralError::NotSubscribed {
+        notifier_slot.send(frame).await.map_err(|err| {
+            tracing::warn!(target: "syauth_transport", peer_id=%peer_id, error=%err, "notification unavailable; retaining GATT registration");
+            // The daemon retries while the phone resubscribes.
+            if err.kind() == std::io::ErrorKind::NotConnected {
+                PeripheralError::NotSubscribed {
                     peer_id: peer_id.to_owned(),
-                })
+                }
+            } else {
+                PeripheralError::Backend {
+                    reason: format!("notify_challenge write: {err}"),
+                }
             }
-        }
+        })
     }
 
     async fn wait_for_response(&self, peer_id: &str, deadline: Duration) -> Result<Vec<u8>, PeripheralError> {
@@ -1349,9 +1236,8 @@ mod tests {
             PeerCharSet {
                 response_rx: Arc::clone(&receiver),
                 _response_tx: tx.clone(),
-                notifier_slot: Arc::new(Mutex::new(None)),
+                notifier_slot: Arc::new(NotificationChannel::default()),
                 task_handle: Mutex::new(None),
-                bond_key: [0; BOND_KEY_BYTES],
             },
         )])));
         let waiting_peers = Arc::clone(&peers);
@@ -1383,6 +1269,12 @@ mod tests {
 
     // Journey: specs/journeys/JOURNEY-S-003-peripheral-library-api.md
     use super::*;
+
+    #[test]
+    fn challenge_notifications_use_the_reconnect_safe_dbus_api() {
+        let (tx, _) = mpsc::channel(RESPONSE_BUFFER_DEPTH);
+        assert!(matches!(peer_notify_method(tx), CharacteristicNotifyMethod::Fun(_)));
+    }
 
     /// `PersistentPeripheral::build_advertisement` carries the
     /// daemon-side defaults (local name, discoverable, the requested

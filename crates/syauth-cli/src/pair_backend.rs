@@ -33,7 +33,7 @@
 //! is exercised in tests that DO NOT touch a radio.
 
 use std::{
-    io::{self, BufRead, Write},
+    io::{self, Write},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -55,7 +55,10 @@ use syauth_transport::{
 };
 use tokio::{io::AsyncReadExt, time::timeout as tokio_timeout};
 
-use crate::pair::{AdapterInfo, LescOutcome, PairBackend, PairCandidate, PairError};
+use crate::pair::{
+    AdapterInfo, ConfirmSource, LescOutcome, NUMERIC_CODE_NOT_OBSERVED, OS_CONFIRM_DECISION_TIMEOUT, OperatorLines, PairBackend,
+    PairCandidate, PairError,
+};
 
 /// Wall-clock window the backend spends waiting for the phone's GATT
 /// client connection (signalled by the first
@@ -124,6 +127,13 @@ pub struct BluerPairBackend {
     /// LE advertisement handle registered in `scan_peers` and dropped
     /// at session end.
     adv_handle: Arc<Mutex<Option<bluer::adv::AdvertisementHandle>>>,
+    /// The 6-digit code BlueZ last asked the agent to confirm. Recorded so
+    /// the CLI can print the same number the phone displays (SPEC §3.2 D5
+    /// "display matching code on both ends") instead of a placeholder.
+    passkey_seen: Arc<Mutex<Option<u32>>>,
+    /// Operator keystrokes, shared with the flow's OOB prompt so one stdin
+    /// reader serves both questions.
+    operator_lines: OperatorLines,
 }
 
 impl BluerPairBackend {
@@ -138,7 +148,21 @@ impl BluerPairBackend {
             phone_pubkey_mailbox: Arc::new(Mutex::new(None)),
             app_handle: Arc::new(Mutex::new(None)),
             adv_handle: Arc::new(Mutex::new(None)),
+            passkey_seen: Arc::new(Mutex::new(None)),
+            operator_lines: OperatorLines::default(),
         }
+    }
+
+    /// Answer a BlueZ `RequestConfirmation` for `passkey` through the
+    /// installed operator surface.
+    ///
+    /// `false` is the fail-closed default when no surface is installed — the
+    /// exact default that turned a forgotten call site into a silent pairing
+    /// failure (BUG-20261018-0120). The BlueZ agent and the unit tests share
+    /// this entry point.
+    #[must_use]
+    pub fn confirm_os_pairing(&self, passkey: u32) -> bool {
+        os_confirm_decision(&self.confirm_channel, passkey)
     }
 
     /// Install the operator's y/N confirmation handler. The handler is
@@ -159,6 +183,7 @@ impl BluerPairBackend {
     /// at the call site.
     fn build_agent(&self) -> Agent {
         let confirm = Arc::clone(&self.confirm_channel);
+        let passkey_seen = Arc::clone(&self.passkey_seen);
         Agent {
             // BlueZ dispatches LESC numeric-comparison requests to the
             // CURRENT default agent on the system bus. Without
@@ -174,7 +199,13 @@ impl BluerPairBackend {
             request_default: true,
             request_confirmation: Some(Box::new(move |RequestConfirmation { passkey, .. }: RequestConfirmation| {
                 let confirm = Arc::clone(&confirm);
+                let passkey_seen = Arc::clone(&passkey_seen);
                 Box::pin(async move {
+                    // Remember the code so the CLI prints what the phone
+                    // shows; SPEC §3.2 D5 requires both ends to match.
+                    if let Ok(mut seen) = passkey_seen.lock() {
+                        *seen = Some(passkey);
+                    }
                     // The operator-supplied handler is synchronous and
                     // may block (the stdio prompt reads `y/N` from
                     // stdin; even the `--yes` auto-accept handler
@@ -186,14 +217,9 @@ impl BluerPairBackend {
                     // with `HCI_ERR_AUTH_FAILURE`. Hop the handler
                     // onto a blocking pool via `spawn_blocking` so
                     // the poller stays free.
-                    let accepted = tokio::task::spawn_blocking(move || {
-                        let guard = confirm.lock().ok()?;
-                        guard.as_ref().map(|h| h(passkey))
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or(false);
+                    let accepted = tokio::task::spawn_blocking(move || os_confirm_decision(&confirm, passkey))
+                        .await
+                        .unwrap_or(false);
                     if accepted { Ok(()) } else { Err(ReqError::Rejected) }
                 })
             })),
@@ -278,6 +304,23 @@ impl BluerPairBackend {
 
 #[async_trait]
 impl PairBackend for BluerPairBackend {
+    /// Route the operator's chosen answer surface into the BlueZ agent's
+    /// `confirm_channel`. The agent reads that channel on every
+    /// `RequestConfirmation`, so installing is the only way to stop the
+    /// fail-closed reject documented in BUG-20261018-0120.
+    fn install_os_confirm(&self, source: ConfirmSource) {
+        let handler = match source {
+            ConfirmSource::Stdio => make_stdio_confirm_handler(self.operator_lines.clone()),
+            ConfirmSource::AutoAccept => make_auto_accept_confirm_handler(),
+            ConfirmSource::Waybar => make_waybar_confirm_handler(),
+        };
+        Self::install_confirm_handler(self, handler);
+    }
+
+    fn operator_lines(&self) -> OperatorLines {
+        self.operator_lines.clone()
+    }
+
     async fn adapter_info(&self, adapter_id: &str) -> Result<AdapterInfo, PairError> {
         let session = bluer::Session::new().await.map_err(map_bluer)?;
         let adapter = session.adapter(adapter_id).map_err(|err| match err.kind {
@@ -461,11 +504,11 @@ impl PairBackend for BluerPairBackend {
         Ok(LescOutcome {
             peer_pubkey: phone_pubkey,
             bond_key,
-            // The 6-digit code is consumed inside the agent callback,
-            // not surfaced here. The operator already confirmed it via
-            // the y/N prompt before this function returns Ok; the
-            // value is informational and reported as 0.
-            numeric_code: 0,
+            // The code BlueZ actually showed the agent, so the terminal
+            // banner matches the phone's dialog. `NUMERIC_CODE_NOT_OBSERVED`
+            // when no numeric comparison reached us (e.g. an existing link
+            // key was re-used).
+            numeric_code: take_recorded_passkey(&self.passkey_seen),
         })
     }
 }
@@ -475,16 +518,29 @@ impl PairBackend for BluerPairBackend {
 /// Exposed as a standalone helper so a future caller (an e2e test, a
 /// scripted-OOB harness) can install a non-interactive handler
 /// without going through the production binary's stdio.
-pub fn make_stdio_confirm_handler() -> OsConfirmHandler {
-    Box::new(|passkey: u32| {
+pub fn make_stdio_confirm_handler(lines: OperatorLines) -> OsConfirmHandler {
+    make_stdio_confirm_handler_with(lines, OS_CONFIRM_DECISION_TIMEOUT)
+}
+
+/// [`make_stdio_confirm_handler`] with the wait window injected, so the
+/// timeout path is testable without a 25 s suite stall.
+fn make_stdio_confirm_handler_with(lines: OperatorLines, timeout: Duration) -> OsConfirmHandler {
+    Box::new(move |passkey: u32| {
         let mut stdout = io::stdout().lock();
-        let _ = writeln!(stdout, "BT pairing code: {passkey:06}  Confirm on phone? [y/N]: ");
+        let _ = writeln!(stdout, "BT pairing code: {passkey:06}");
+        let _ = writeln!(
+            stdout,
+            "The phone must show the SAME code. Type y + Enter HERE to accept, N + Enter to reject (waiting {} s):",
+            timeout.as_secs()
+        );
         let _ = stdout.flush();
-        let stdin = io::stdin();
-        let mut buf = String::new();
-        match stdin.lock().read_line(&mut buf) {
-            Ok(_) => matches!(buf.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
-            Err(_) => false,
+        // Read from the shared keystroke queue, never from `io::stdin()`:
+        // the stdin handle is a process-wide lock owned by the pair flow,
+        // and blocking on it here is what made the agent ignore BlueZ
+        // (BUG-20261018-0120). Bounded so BlueZ always gets an answer.
+        match lines.take_line(Some(timeout)) {
+            Some(answer) => matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
+            None => false,
         }
     })
 }
@@ -696,6 +752,25 @@ fn map_bluer(err: bluer::Error) -> PairError {
     }
 }
 
+/// Consult the installed operator surface. Fail-closed: a poisoned mutex or
+/// a missing surface both answer "reject", because accepting a numeric
+/// comparison nobody looked at is worse than a failed pairing.
+fn os_confirm_decision(confirm: &Arc<Mutex<Option<OsConfirmHandler>>>, passkey: u32) -> bool {
+    match confirm.lock() {
+        Ok(guard) => guard.as_ref().is_some_and(|handler| handler(passkey)),
+        Err(_poisoned) => false,
+    }
+}
+
+/// Take the passkey BlueZ last asked the agent to confirm, leaving the
+/// mailbox empty for the next caller.
+fn take_recorded_passkey(passkey_seen: &Mutex<Option<u32>>) -> u32 {
+    match passkey_seen.lock() {
+        Ok(mut guard) => guard.take().unwrap_or(NUMERIC_CODE_NOT_OBSERVED),
+        Err(_poisoned) => NUMERIC_CODE_NOT_OBSERVED,
+    }
+}
+
 fn unix_minute_floor() -> i64 {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -736,6 +811,95 @@ mod tests {
         backend.install_confirm_handler(Box::new(|_p| true));
         backend.install_confirm_handler(Box::new(|_p| false));
         assert!(backend.confirm_channel.lock().is_ok());
+    }
+
+    /// 6-digit code BlueZ would present; matches the code observed on the
+    /// phone during BUG-20261018-0120's reproduction.
+    const TEST_PASSKEY: u32 = 495_916;
+    /// Decision window for the timeout-path tests — short enough to keep the
+    /// suite quick, long enough to beat scheduler jitter.
+    const SHORT_DECISION_TIMEOUT: Duration = Duration::from_millis(500);
+    /// Delay before the simulated operator answers, so the handler is
+    /// provably waiting rather than racing the keystroke.
+    const OPERATOR_LINE_DELAY: Duration = Duration::from_millis(100);
+
+    /// A keystroke that arrives on the shared queue after the agent starts
+    /// waiting must reach the handler. Pre-fix the handler read
+    /// `io::stdin()` — a process-wide lock the flow already holds — so this
+    /// answer could never land and BlueZ got no reply at all.
+    #[test]
+    fn stdio_confirm_accepts_when_the_operator_answers_the_queue() {
+        let backend = BluerPairBackend::new("hci0", &fixed_signing_key());
+        backend.install_os_confirm(ConfirmSource::Stdio);
+        let lines = backend.operator_lines();
+        std::thread::spawn(move || {
+            std::thread::sleep(OPERATOR_LINE_DELAY);
+            lines.push("y");
+        });
+
+        assert!(
+            backend.confirm_os_pairing(TEST_PASSKEY),
+            "an operator 'y' on the queue must accept the numeric comparison"
+        );
+    }
+
+    /// Declining is as easy as accepting, and silence is a decline: the
+    /// handler must answer BlueZ itself instead of letting the stack time out.
+    #[test]
+    fn stdio_confirm_rejects_when_the_operator_declines() {
+        let lines = OperatorLines::default();
+        let operator = lines.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(OPERATOR_LINE_DELAY);
+            operator.push("n");
+        });
+        let handler = make_stdio_confirm_handler_with(lines, SHORT_DECISION_TIMEOUT);
+
+        assert!(!handler(TEST_PASSKEY), "only y/yes accepts the numeric comparison");
+    }
+
+    #[test]
+    fn stdio_confirm_rejects_when_no_answer_arrives_in_time() {
+        let handler = make_stdio_confirm_handler_with(OperatorLines::default(), SHORT_DECISION_TIMEOUT);
+
+        let started = std::time::Instant::now();
+        assert!(!handler(TEST_PASSKEY), "a silent operator must not bond a stranger");
+        let waited = started.elapsed();
+        assert!(
+            waited >= SHORT_DECISION_TIMEOUT && waited < SHORT_DECISION_TIMEOUT * 6,
+            "the handler must wait the window out, not hang or spin: {waited:?}"
+        );
+    }
+
+    /// The fail-closed default is what made BUG-20261018-0120 invisible:
+    /// it must stay reject-only, and it must be explicit.
+    #[test]
+    fn missing_confirm_surface_rejects_numeric_comparison() {
+        let backend = BluerPairBackend::new("hci0", &fixed_signing_key());
+
+        assert!(
+            !backend.confirm_os_pairing(TEST_PASSKEY),
+            "no installed surface may never accept a numeric comparison"
+        );
+    }
+
+    #[test]
+    fn recorded_passkey_is_handed_over_once() {
+        let seen = Mutex::new(Some(TEST_PASSKEY));
+
+        assert_eq!(take_recorded_passkey(&seen), TEST_PASSKEY);
+        assert_eq!(
+            take_recorded_passkey(&seen),
+            NUMERIC_CODE_NOT_OBSERVED,
+            "the code must be consumed so a stale value cannot leak into the next attempt"
+        );
+    }
+
+    #[test]
+    fn passkey_defaults_to_not_observed_when_the_agent_was_never_asked() {
+        let seen = Mutex::new(None::<u32>);
+
+        assert_eq!(take_recorded_passkey(&seen), NUMERIC_CODE_NOT_OBSERVED);
     }
 
     #[test]

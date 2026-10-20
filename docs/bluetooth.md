@@ -139,7 +139,7 @@ startup, and a failed advertising registration. Run it with
 `dbus-daemon`, Python's `dbus` module, and PyGObject; they skip if those tools are
 missing.
 
-## Emulator transport test
+## Emulator transport matrix
 
 The transport test passed on Android 15/API 35 with Emulator 37.1.11. A
 userspace [Bumble peer](https://google.github.io/bumble/transports/android_emulator.html)
@@ -149,54 +149,40 @@ received a challenge, and wrote a response. Both a BLE-only peer and a dual-mode
 peer passed. The peer recorded an LE connection in each run, with no Classic
 connection.
 
-This test covers GATT transport. It does not validate numeric-comparison pairing,
-Keystore signing, fingerprint approval, power consumption, or physical-radio
-reconnection. The Pixel acceptance steps above cover the user-facing behavior.
-
-Build the native AAR with the emulator's ABI using the
-[Android build procedure](getting-started.md#build-and-install-android), then:
+Use a disposable Android 13+ emulator with Bluetooth netsim support, a full
+JDK 17 or 21 installation, the Android SDK, `adb`, and `uv`. The existing native
+AAR must include the emulator's ABI; `make android-aar` builds it when needed.
 
 ```sh
 cd syauth-android
-./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest
+./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest
 cd ..
 ```
 
-Start an owned Android 13+ emulator with Bluetooth simulation. The tested launch
-used these options with an existing API 35 AVD:
+Create an owned AVD rather than using a personal phone or an existing user's AVD.
+For example, start the SDK emulator with an available even-numbered port:
 
 ```sh
-emulator -avd AVD_NAME -port 5556 -no-window -no-audio -gpu swangle \
-  -no-snapshot -netsim-args '--pcap'
+emulator -avd SYAUTH_TEST_AVD -port 5556 -no-window -no-audio \
+  -gpu swangle -feature -Vulkan -no-snapshot -netsim-args '--pcap'
+adb -s emulator-5556 shell cmd bluetooth_manager enable
+adb -s emulator-5556 install --user 0 -r syauth-android/app/build/outputs/apk/debug/app-debug.apk
+adb -s emulator-5556 install --user 0 -r syauth-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+SYAUTH_BLE_EMULATOR_SERIAL=emulator-5556 cargo test --test bt_matrix -- --ignored --nocapture
 ```
 
-Use an available port and the emulator SDK's executable. Enable Bluetooth,
-verify that its current Android user is 0, and install both APKs. Substitute its
-serial for `EMULATOR_SERIAL`:
+The runner requires an emulator serial, verifies its emulator identity and
+Android user 0, then starts the pinned Bumble peer with BLE-only and dual-mode
+configurations. Each case must exchange both fixture keys, receive a notification,
+and write the expected response over LE. It requires `OK (1 test)`, rejects a
+skipped instrumentation test, and checks the peer's independent `PASS` and exit
+status. It stops only the fixture processes it starts. If `uv` selects an
+unsuitable Python environment, set `UV_PYTHON` to an installed Python executable.
 
-```sh
-adb -s EMULATOR_SERIAL shell am get-current-user
-adb -s EMULATOR_SERIAL install --user 0 -r syauth-android/app/build/outputs/apk/debug/app-debug.apk
-adb -s EMULATOR_SERIAL install --user 0 -r syauth-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-uv run scripts/ble-emulator-peer.py
-```
-
-The peer prints `READY blePeerAddress=...`. In another terminal, run the test
-with that address, omitting the `/P` suffix:
-
-```sh
-adb -s EMULATOR_SERIAL shell am instrument -w -r \
-  -e class com.sy.syauth.android.bg.BluetoothLeTransportTest \
-  -e blePeerAddress PEER_ADDRESS \
-  com.sy.syauth.android.test/androidx.test.runner.AndroidJUnitRunner
-```
-
-Require `OK (1 test)` from Android and `PASS` with exit code 0 from the peer.
-Repeat with `uv run scripts/ble-emulator-peer.py --dual-mode`. Without
-`blePeerAddress`, the instrumentation test skips itself. It also skips on
-physical devices. The peer exits after 180 seconds if no test completes.
-`uv` and Bumble are development tools; neither is needed on the laptop or Pixel
-to use syauth.
+These cases exercise GATT transport with synthetic fixture bytes. They do not
+qualify numeric comparison, Keystore signing, biometrics, power consumption, or
+physical-radio recovery. The matrix is explicitly ignored by the ordinary
+workspace suite; the explicit command above runs it without accepting skips.
 
 ## Recover stale GATT subscriptions
 
@@ -208,8 +194,10 @@ journalctl --user -u syauth-presenced --since '5 minutes ago' --no-pager
 ```
 
 The current daemon logs `waiting for phone notification subscription` when the
-phone is not ready. A dead notification writer causes it to rebuild its GATT
-service and retry the same challenge while the phone subscribes again. Recovery
+phone is not ready and retries the same challenge while the phone subscribes
+again. It uses standard BlueZ notifications and keeps its GATT registration when
+a notification session closes (BUG-20261018-1736); look for
+`notification session closed; awaiting re-subscribe`. Recovery
 and fingerprint approval share the original eight-second authentication deadline;
 recovery does not extend that deadline. Cancellation stops the pending request.
 
@@ -246,4 +234,24 @@ Environment=SYAUTH_RECONNECT_DEVICE=AA:BB:CC:DD:EE:FF
 
 Reload the user manager and restart `syauth-presenced` after changing this
 configuration. The configured phone may disconnect and reconnect when the
-daemon rebuilds its GATT registration to recover stale subscriptions.
+daemon rebuilds its GATT registration, for example after adding a bond.
+
+## Pairing troubleshooting
+
+If Android reports `host-pubkey read failed status=1` while the desktop
+already lists an active peer, update the companion app. Pairing reads the
+desktop key first, then sends the phone key. Sending the phone key commits
+pairing and permits the daemon to replace the pair service with its unlock
+service. Repeating the exchange after that transition uses invalid handles.
+
+If `syauth status --json` shows no peers, check `syauth list`: revoked records
+are retained for audit and cannot authenticate. Complete fresh pairing.
+Revoke access with `syauth revoke --id <peer_id>`.
+
+Regression coverage: PairGattOrderTest and RealPairBackendRuntimeTest verify
+service replacement ordering and duplicate callback handling without radio I/O.
+
+Open the desktop pairing window with `syauth pair --waybar --force` before
+selecting Pair with computer on Android. Confirm matching codes on both sides
+within the pairing deadline. Done refreshes the home card and starts the unlock
+connection immediately; reopening the app also loads the persisted bond.

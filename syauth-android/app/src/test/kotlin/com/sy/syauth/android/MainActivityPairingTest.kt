@@ -61,6 +61,7 @@ class MainActivityPairingTest {
 
         assertEquals(record, activity.bondRecord.value)
         assertEquals(record.keystoreAlias, SyauthCompanionService.keystoreAliasResolver?.keystoreAliasFor(record.peerId))
+        assertEquals(record.peerId, SyauthCompanionService.bondListProvider?.bonds()?.single()?.peerId)
         assertEquals(SyauthCompanionService::class.java.name, shadowOf(app).nextStartedService?.component?.className)
         controller.destroy()
     }

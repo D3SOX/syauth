@@ -160,6 +160,20 @@ private class ThrowingKeystoreKeyGenerator(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class RealPairBackendRuntimeTest {
+    @Test fun duplicate_bond_callbacks_exchange_keys_once() {
+        var exchanges = 0
+        val exchange = object : PairGattExchange {
+            override fun exchangePubkeys(address: String, phonePubkey: ByteArray): ByteArray {
+                exchanges += 1
+                return ByteArray(PAIR_PUBKEY_LEN)
+            }
+        }
+        val backend = makeBackend(null, exchange, keystoreKeyGenerator = FixedKeystoreKeyGenerator())
+        backend.runPostBondExchange(FIXTURE_PEER_ADDR)
+        backend.runPostBondExchange(FIXTURE_PEER_ADDR)
+        assertEquals(1, exchanges)
+        backend.cleanup()
+    }
 
     private fun makeBackend(
         companionScanner: PairCompanionScanner?,

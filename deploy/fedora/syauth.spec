@@ -1,19 +1,20 @@
 # Fedora RPM spec for syauth v0.1.0 (roadmap item S-021).
 #
 # This spec ships the Linux desktop side of syauth — the PAM cdylib
-# under %{_libdir}/security/pam_syauth.so (mode 0644 per SPEC §6 +
+# under %%{_libdir}/security/pam_syauth.so (mode 0644 per SPEC §6 +
 # specs/threat/THREAT-2026-05-15.md), the `syauth` CLI under
-# %{_bindir}/syauth (mode 0755), the manpage under
-# %{_mandir}/man8/syauth.8.gz, and the doc set. The %post scriptlet
+# %%{_bindir}/syauth (mode 0755), the manpage under
+# %%{_mandir}/man8/syauth.8.gz, and the doc set. The %post scriptlet
 # creates /var/lib/syauth/ with mode 0700 (the bond-store dir; bond
 # records inside it land at 0600 via the `syauth pair` CLI from S-005).
 # %preun deliberately does nothing because the bond store is persisted
 # user state — uninstalling the package does NOT revoke any paired
-# phone. Built under `mock -r fedora-%{fedora}-x86_64 deploy/fedora/syauth.spec`
+# phone. Built under `mock -r fedora-%%{fedora}-x86_64 deploy/fedora/syauth.spec`
 # or via `make rpm` (which gates on `which mock`).
 
 %global package_version 0.1.0
-%global rpm_release 1
+%global rpm_release 4
+%global debug_package %{nil}
 %global min_fedora 39
 
 Name:           syauth
@@ -34,16 +35,15 @@ ExclusiveArch:  x86_64 aarch64
 # Build-time toolchain. cargo + rust are bumped to 1.85 to match the
 # workspace's `rust-version`. pam-devel is required for the PAM header
 # bindings; bluez-libs-devel for the BlueZ DBus interface that bluer
-# wraps; libsecret-devel for the secret-storage fallback; openssl-devel
+# wraps; openssl-devel
 # for the rustls/ring transitive crypto. systemd-rpm-macros provides
-# %{_unitdir} (unused in v0.1, declared for forward compatibility).
+# %%{_unitdir} (unused in v0.1, declared for forward compatibility).
 BuildRequires:  cargo >= 1.85
 BuildRequires:  rust >= 1.85
 BuildRequires:  pam-devel
 BuildRequires:  pkgconf-pkg-config
 BuildRequires:  bluez-libs-devel
 BuildRequires:  systemd-rpm-macros
-BuildRequires:  libsecret-devel
 BuildRequires:  openssl-devel
 BuildRequires:  gzip
 
@@ -55,6 +55,7 @@ Requires:       pam >= 1.5
 Requires:       bluez >= 5.66
 Requires:       dbus
 Requires:       libsecret
+Requires:       systemd
 
 # Mark Fedora 39 as the floor. Older Fedora may build but is not on
 # the supported matrix (see specs/syauth/SPEC.md §3.3).
@@ -74,16 +75,18 @@ quick start and docs/security.md for the threat model.
 %autosetup -n %{name}-%{version}
 
 %build
-# The workspace produces both the PAM cdylib (libpam_syauth.so) and
-# the CLI (syauth) from one `cargo build --release`. Restricting to
-# the two packages we ship cuts the build closure roughly in half
-# versus building the whole workspace.
-cargo build --release \
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    mkdir -p "$CARGO_TARGET_DIR"
+    ln -s "$CARGO_TARGET_DIR" target
+fi
+# Build the PAM module, CLI, and desktop presence daemon together.
+cargo build --release --locked \
     --package syauth-pam \
-    --package syauth-cli
+    --package syauth-cli \
+    --package syauth-presenced
 
 # Manpage. The source crate exposes its `--help` output; the manpage
-# below is a hand-authored stub that points at `--help` and the
+# below points at `--help` and the
 # README — the help text itself is the source of truth, so a richer
 # manpage would duplicate effort. Closure plan documented in
 # docs/release-process.md.
@@ -106,9 +109,19 @@ README at \fI/usr/share/doc/syauth/README.md\fR for the quick start.
 .SH AUTHORS
 syauth contributors.
 MAN
-gzip -9 target/man/syauth.8
+gzip -9f target/man/syauth.8
+
+%check
+target/release/syauth --help | grep -q pair
+target/release/syauth-presenced --help | grep -q -- '--socket'
 
 %install
+install -D -m 0755 target/release/syauth-presenced \
+    %{buildroot}%{_libexecdir}/syauth-presenced
+install -D -m 0644 crates/syauth-presenced/dist/syauth-presenced.service \
+    %{buildroot}%{_userunitdir}/syauth-presenced.service
+sed -i 's|/usr/local/libexec/syauth-presenced|%{_libexecdir}/syauth-presenced|g' \
+    %{buildroot}%{_userunitdir}/syauth-presenced.service
 # PAM cdylib — mode 0644 (world-readable, root-writable). The mode is
 # pinned by specs/threat/THREAT-2026-05-15.md Finding F-002 and by
 # SPEC §6.
@@ -123,18 +136,16 @@ install -D -m 0755 target/release/syauth \
 install -D -m 0644 target/man/syauth.8.gz \
     %{buildroot}%{_mandir}/man8/syauth.8.gz
 
-# /var/lib/syauth/ is created at %post time with mode 0700, NOT here:
-# we want the directory only to exist on installed systems, not in
-# %{buildroot} where it would inherit %defattr defaults.
+# Bond state is not owned by RPM metadata: upgrades must preserve
+# the existing per-user daemon's directory ownership.
 
 %post
 # Idempotent bond-store directory creation. The mode 0700 is pinned by
 # specs/threat/THREAT-2026-05-15.md Finding F-001 (root-only access).
-# If the directory already exists (re-install, upgrade), `install -d`
-# is a no-op for the path but DOES re-apply the mode, which we
-# explicitly want — a previous admin who widened the mode is corrected
-# back to 0700 on every package operation.
-install -d -m 0700 -o root -g root /var/lib/syauth || :
+# Existing directories retain their configured owner and permissions.
+if [ ! -e /var/lib/syauth ]; then
+    install -d -m 0700 -o root -g root /var/lib/syauth
+fi
 
 %preun
 # Deliberately empty. The bond store is persisted user state; an
@@ -147,10 +158,23 @@ install -d -m 0700 -o root -g root /var/lib/syauth || :
 %doc README.md docs/security.md docs/android-setup.md
 %{_libdir}/security/pam_syauth.so
 %{_bindir}/syauth
+%{_libexecdir}/syauth-presenced
+%{_userunitdir}/syauth-presenced.service
 %{_mandir}/man8/syauth.8.gz
-%dir %attr(0700, root, root) /var/lib/syauth
 
 %changelog
+* Tue Oct 20 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-4
+- Publish native Linux packages, a signed Android APK, and release checksums.
+- Add package-manager installation and published documentation.
+
+* Sun Oct 18 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-3
+- Use standard BlueZ notifications across phone reconnection.
+- Correct the user unit's documentation URL.
+
+* Sun Oct 18 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-2
+- Ship the presence daemon and user unit with pairing and recovery repairs.
+- Preserve existing bond-directory ownership during upgrades.
+
 * Fri May 15 2026 syauth contributors <noreply@anthropic.com> - 0.1.0-1
 - Initial release. PAM module (pam_syauth.so), CLI (syauth) with
   pair/list/revoke/status subcommands, Android companion shipped

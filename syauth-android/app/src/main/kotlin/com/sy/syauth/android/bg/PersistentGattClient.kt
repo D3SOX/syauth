@@ -213,8 +213,10 @@ public class PersistentGattClient internal constructor(
      * The OS will hold the connection across range transitions
      * without further app calls. Idempotent.
      */
+    @Synchronized
     public fun start() {
         stopped.set(false)
+        if (!runCatching { adapter.isEnabled }.getOrDefault(false)) return
         if (gatt.get() != null) return
         subscriptionPhase.set(SubscriptionPhase.IDLE)
         // Registration can fail while Android's Bluetooth service is restarting.
@@ -250,6 +252,7 @@ public class PersistentGattClient internal constructor(
      * Tear down the GATT connection. Idempotent — a second call
      * after close is a no-op.
      */
+    @Synchronized
     public fun stop() {
         stopped.set(true)
         reconnectHandler.removeCallbacks(reconnectRunnable)
@@ -268,9 +271,11 @@ public class PersistentGattClient internal constructor(
      *
      * Sequence: disconnect → close → reopen with the same
      * `autoConnect=true` semantics as [start]. Idempotent; safe to
-     * call whether or not the client was previously started.
+     * call while running. An intentionally stopped client stays stopped.
      */
+    @Synchronized
     public fun forceReconnect() {
+        if (stopped.get()) return
         Log.i(PERSISTENT_GATT_LOG_TAG, "forceReconnect: tearing down stale GATT")
         val handle = gatt.getAndSet(null)
         if (handle != null) {

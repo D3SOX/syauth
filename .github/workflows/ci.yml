@@ -90,6 +90,11 @@ jobs:
       - name: Test pacman update checker
         run: python3 -m unittest discover -s tests -p test_pam_update_check.py
 
+      - name: Test release packaging, installer, and signing contracts
+        run: |
+          python3 -m unittest discover -s tests -p 'test_release_*.py'
+          python3 -m unittest discover -s tests -p test_installer.py
+
   build:
     name: build (release workspace + cdylib)
     runs-on: ubuntu-latest

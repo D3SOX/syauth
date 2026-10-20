@@ -74,6 +74,34 @@ only the phone's address for [desktop Bluetooth recovery](bluetooth.md). Opening
 the app can reinitialize its connection; that is distinct from the fixed pairing
 completion bug. No Bluetooth adapter reset is part of the normal procedure.
 
+## Where the two `y` answers belong
+
+The system code and the app phrase are separate keystrokes, on purpose:
+
+* The **OS numeric comparison** is answered on the machine running
+  `syauth pair`. The CLI prints the code BlueZ gave it and waits up to
+  `OS_CONFIRM_DECISION_TIMEOUT` (25 s) for `y` + Enter **at the desktop
+  keyboard**; the phone's dialog needs its own tap. Typing `y` early —
+  the moment the code matches on either screen — is fine: keystrokes are
+  queued and delivered to whichever prompt asks first.
+* The **app-level OOB** `[y/N]` is answered in the same terminal, after the
+  numeric comparison, against the 4-word code the phone prints.
+
+If nobody answers the numeric comparison, the CLI answers BlueZ "reject"
+once the window closes and says so, instead of leaving the phone waiting:
+a pairing attempt that nobody confirmed must fail, and it must look like
+that and not like a broken radio.
+
+## Troubleshooting the pair flow
+
+| Symptom | Check | Fix / note |
+|---------|-------|-----------|
+| `unrecognized subcommand 'pair'` | `syauth --help` lists `pair` | The installed binary predates the build in `target/`; install the current one (`make install`). |
+| Phone's pairing dialog appears, tap does nothing | Desktop terminal shows `BT pairing code: NNNNNN` and the "Type y + Enter HERE" line | Answer at the desktop. `--waybar` hands the same decision to the bar applet; `--yes` auto-accepts (tests / scripted rigs only). |
+| Codes differ between desktop and phone | — | **Stop and cancel on the phone.** Differing codes mean the numeric comparison is being relayed; SPEC §3.2 D5 exists for this case. |
+| `error: no advertising peers found` after ~5 min | `systemctl --user status syauth-presenced`, `bluetoothctl show` | The CLI advertised for its accept window and no phone connected. Check the app is on the pairing screen, then retry. |
+| Repeated attempts leave the picker empty | `adb shell dumpsys companiondevice` and count `com.sy.syauth.android` rows | Each `CompanionDeviceManager.associate` adds an association and they accumulate; clear the stale ones with `adb shell cmd companiondevice disassociate <user> <pkg> <desktop-address>`. |
+
 ## Cancellation and KDE
 
 The phone verifies the complete challenge/cancellation frame before interpreting

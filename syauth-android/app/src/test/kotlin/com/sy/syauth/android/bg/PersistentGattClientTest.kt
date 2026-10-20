@@ -45,6 +45,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -163,6 +164,43 @@ class SubscriptionGattShadow : ShadowBluetoothGatt() {
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26, 34], shadows = [SubscriptionGattShadow::class])
 class PersistentGattClientTest {
+    @Before
+    fun radioIsEnabled() {
+        shadowOf(BluetoothAdapter.getDefaultAdapter()).setState(BluetoothAdapter.STATE_ON)
+    }
+    @Test
+    fun radio_off_does_not_open_or_poll_gatt() {
+        shadowOf(BluetoothAdapter.getDefaultAdapter()).setState(BluetoothAdapter.STATE_OFF)
+        val opener = RecordingOpener(newShadowGatt())
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        shadowOf(Looper.getMainLooper()).idleFor(PersistentGattClient.RECONNECT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        assertEquals(0, opener.openCalls)
+        client.stop()
+    }
+
+    @Test
+    fun reconnect_cannot_revive_a_stopped_client() {
+        val opener = RecordingOpener(newShadowGatt())
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> }, opener)
+        client.start()
+        client.stop()
+        client.forceReconnect()
+        assertEquals(1, opener.openCalls)
+    }
+
+    @Test
+    @Config(sdk = [34])
+    fun callbacks_from_a_closed_handle_do_not_deliver_challenges() {
+        val old = newShadowGatt()
+        val opener = RecordingOpener(newShadowGatt())
+        var delivered = 0
+        val client = PersistentGattClient(ctx(), BluetoothAdapter.getDefaultAdapter(), TEST_PEER_ID, TEST_DEVICE_MAC, { _, _ -> delivered++ }, opener)
+        client.start()
+        opener.lastCallback!!.onCharacteristicChanged(old, makeChallengeChar(), byteArrayOf(1))
+        assertEquals(0, delivered)
+        client.stop()
+    }
 
     private fun client(opener: GattOpener) = PersistentGattClient(
         context = ctx(),
