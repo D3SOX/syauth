@@ -8,9 +8,14 @@ updates:
     directories:
       - /
       - /crates/syauth-core/fuzz
+      - /tools/uniffi-bindgen
     schedule:
       interval: weekly
   - package-ecosystem: gradle
     directory: /syauth-android
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /
     schedule:
       interval: weekly
