@@ -152,6 +152,26 @@ def check_contrast(page):
     print("PASS representative navigation, explanation and control contrast")
 
 
+def check_code_contrast(page, base):
+    """Every highlighted code token must stay readable on its code block."""
+    pages = sorted(path for path in SITE.rglob("index.html") if 'class="highlight"' in path.read_text())
+    assert pages, "Expected highlighted code blocks in the built site"
+    for path in pages:
+        page.goto(base + str(path.parent.relative_to(SITE)).replace(".", "") + "/")
+        tokens = page.evaluate(r"""() => {
+            const rgb = value => value.match(/[\d.]+/g).map(Number);
+            return Array.from(document.querySelectorAll('.md-typeset .highlight code span')).filter(e => e.textContent.trim()).map(e => {
+                let background = e;
+                while (background.parentElement && getComputedStyle(background).backgroundColor === 'rgba(0, 0, 0, 0)') background = background.parentElement;
+                return {text: e.textContent, cls: e.className, fg: rgb(getComputedStyle(e).color), bg: rgb(getComputedStyle(background).backgroundColor)};
+            });
+        }""")
+        for token in tokens:
+            ratio = contrast_ratio(token["fg"], token["bg"])
+            assert ratio >= 4.5, f"Unreadable code token contrast {ratio:.2f} in {path.parent.name}: .{token['cls']} {token['text']!r}"
+    print(f"PASS highlighted code contrast on {len(pages)} pages")
+
+
 def check_svg_contrast(page):
     for scene in page.locator("svg.sy-scene").all():
         colors = scene.evaluate(r"""scene => {
@@ -458,7 +478,11 @@ def check_plain_and_mobile(browser, base, wide_views):
 def check_search(page, base):
     page.goto(base)
     check_contrast(page)
-    page.locator("input.md-search__input").fill("Ed25519")
+    # A query typed while the index loads is never rerun, and the search reacts
+    # to keystrokes rather than a programmatic fill: wait, then type.
+    page.locator("input.md-search__input").click()
+    expect(page.locator(".md-search-result__meta")).to_have_text("Type to start searching", timeout=15000)
+    page.locator("input.md-search__input").press_sequentially("Ed25519")
     expect(page.locator(".md-search-result__item").first).to_be_visible(timeout=10000)
     print("PASS local search returns protocol results")
 
@@ -504,6 +528,7 @@ def main():
             check_final_delivery(page)
             check_search(page, base)
             page.keyboard.press("Escape")
+            check_code_contrast(page, base)
             page.screenshot(path=str(PREVIEW / "desktop-home.png"), full_page=True)
             page.goto(base + MECHANICS)
             page.screenshot(path=str(PREVIEW / "desktop-mechanics.png"), full_page=True)
@@ -511,6 +536,8 @@ def main():
             check_plain_and_mobile(browser, base, wide_views)
             check_tablet(browser, base, wide_views)
             page.emulate_media(media="print")
+            check_code_contrast(page, base)
+            page.goto(base + MECHANICS)
             check_contrast(page)
             for widget in page.locator(".sy-mechanics").all():
                 expect(widget).to_be_hidden()

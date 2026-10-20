@@ -29,6 +29,19 @@
   --md-admonition-bg-color: var(--sy-surface);
   --md-text-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --md-code-font: ui-monospace, "Cascadia Code", "SFMono-Regular", monospace;
+  /* Syntax tokens stay at 4.5:1 or more on the code surface. */
+  --md-code-hl-keyword-color: var(--sy-paw);
+  --md-code-hl-special-color: var(--sy-paw);
+  --md-code-hl-string-color: #9be28f;
+  --md-code-hl-number-color: var(--sy-key);
+  --md-code-hl-constant-color: #ffb86c;
+  --md-code-hl-function-color: #8fd3ff;
+  --md-code-hl-name-color: #b9d7ff;
+  --md-code-hl-variable-color: #b9d7ff;
+  --md-code-hl-operator-color: #dddddd;
+  --md-code-hl-punctuation-color: #dddddd;
+  --md-code-hl-generic-color: #dddddd;
+  --md-code-hl-comment-color: var(--sy-dim);
 }
 .md-header { border-bottom: 1px solid var(--sy-border); box-shadow: none; }
 .md-header__button.md-logo img { height: 2rem; width: 2rem; image-rendering: pixelated; }
@@ -171,7 +184,7 @@ a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid 
 }
 @media print {
   .sy-mechanics, .sy-hero img { display: none; }
-  [data-md-color-scheme="syauth"] { color-scheme: light; --sy-white: #000; --sy-black: #fff; --sy-dim: #333; --sy-surface: #fff; --sy-border: #ccc; --sy-key: #000; --sy-paw: #000; --md-default-bg-color: #fff; --md-default-fg-color: #000; --md-typeset-color: #000; --md-code-fg-color: #000; --md-code-bg-color: #fff; --md-typeset-a-color: #000; }
+  [data-md-color-scheme="syauth"] { color-scheme: light; --sy-white: #000; --sy-black: #fff; --sy-dim: #333; --sy-surface: #fff; --sy-border: #ccc; --sy-key: #000; --sy-paw: #000; --md-default-bg-color: #fff; --md-default-fg-color: #000; --md-typeset-color: #000; --md-code-fg-color: #000; --md-code-bg-color: #fff; --md-typeset-a-color: #000; --md-code-hl-keyword-color: #000; --md-code-hl-special-color: #000; --md-code-hl-string-color: #000; --md-code-hl-number-color: #000; --md-code-hl-constant-color: #000; --md-code-hl-function-color: #000; --md-code-hl-name-color: #000; --md-code-hl-variable-color: #000; --md-code-hl-operator-color: #000; --md-code-hl-punctuation-color: #000; --md-code-hl-generic-color: #000; --md-code-hl-comment-color: #333; }
   .sy-hero p { color: #000; }
   .md-typeset table:not([class]) th { color: #000; background: #fff; }
 }
