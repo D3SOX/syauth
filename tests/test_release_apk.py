@@ -11,7 +11,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/build-release-apk.sh"
-FINGERPRINT = "25585e641edb3da87b989056b3d165cac2afaf2aaedd35875666b521ecc0221c"
+# Derived from the committed certificate so a fork's own signing key needs no test edit.
+FINGERPRINT = subprocess.run(
+    ["openssl", "x509", "-in", str(ROOT / "deploy/android-release-signing.pem"), "-noout", "-fingerprint", "-sha256"],
+    capture_output=True, text=True, check=True,
+).stdout.split("=", 1)[1].strip().replace(":", "").lower()
 
 
 class ReleaseApkTests(unittest.TestCase):

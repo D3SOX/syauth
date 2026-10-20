@@ -37,7 +37,7 @@ case "$distro" in
     fedora) manager=dnf; format=rpm;;
     opensuse-tumbleweed|opensuse-leap|opensuse) manager=zypper; format=rpm;;
     arch|endeavouros|manjaro) manager=pacman; format=arch;;
-    *) fail "Unsupported distribution: $distro. See https://dmytrogajewski.github.io/syauth/how-to/install/";;
+    *) fail "Unsupported distribution: $distro. See https://d3sox.me/syauth/how-to/install/";;
 esac
 command -v "$manager" >/dev/null 2>&1 || fail "Native package manager missing: $manager"
 work=$(mktemp -d "${TMPDIR:-/tmp}/syauth-install.XXXXXXXX")
@@ -45,8 +45,8 @@ trap 'rm -rf "$work"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 fetch() { curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 180 --retry 3 --output "$2" "$1"; }
-repo=https://github.com/dmytrogajewski/syauth
-api=https://api.github.com/repos/dmytrogajewski/syauth/releases
+repo=https://github.com/D3SOX/syauth
+api=https://api.github.com/repos/D3SOX/syauth/releases
 if [ -n "$version" ]; then
     endpoint=$api/tags/v$version
 else
@@ -64,10 +64,14 @@ case "$format" in
 esac
 base=$repo/releases/download/$tag
 printf 'Downloading syauth %s for %s/%s\n' "$version" "$distro" "$arch"
-fetch "$base/SHA256SUMS" "$work/SHA256SUMS"
 fetch "$base/$asset" "$work/$asset"
-# Select exactly one complete manifest entry; reject duplicates and malformed hashes.
-awk -v name="$asset" '$2==name {if(length($1)!=64 || $1 ~ /[^0-9a-f]/) exit 1; print $1 "  " name; count++} END {if(count!=1) exit 1}' "$work/SHA256SUMS" > "$work/selected.sha256" || fail 'Missing, duplicated, or malformed package checksum'
+# GitHub's release API reports a SHA-256 digest per asset. Split the JSON into
+# key/value lines, then take the digest of exactly one asset with this exact name.
+tr -d '\r\n' < "$work/release.json" | tr ',{}[]' '\n\n\n\n\n' | awk -v name="$asset" '
+    $0 ~ /^[[:space:]]*"name"[[:space:]]*:/ { value=$0; sub(/^[^:]*:[[:space:]]*"/, "", value); sub(/"[[:space:]]*$/, "", value); if (value == name) current=1 }
+    current && $0 ~ /^[[:space:]]*"digest"[[:space:]]*:/ { value=$0; sub(/^[^:]*:[[:space:]]*"sha256:/, "", value); sub(/"[[:space:]]*$/, "", value); if (length(value) != 64 || value ~ /[^0-9a-f]/) exit 1; print value "  " name; count++; current=0 }
+    $0 ~ /^[[:space:]]*"browser_download_url"[[:space:]]*:/ { current=0 }
+    END { if (count != 1) exit 1 }' > "$work/selected.sha256" || fail 'Missing, duplicated, or malformed package checksum'
 (cd "$work" && sha256sum --check selected.sha256) || fail 'Checksum verification failed; refusing installation'
 if [ "$dry_run" = true ]; then
     printf 'Verified %s; would install with %s. No changes made.\n' "$asset" "$manager"
@@ -86,4 +90,4 @@ case "$manager" in
     zypper) run_root zypper --non-interactive install --allow-unsigned-rpm "$work/$asset";;
     pacman) run_root pacman -U --noconfirm "$work/$asset";;
 esac
-printf '%s\n' 'Installed. PAM configuration is unchanged. Follow https://dmytrogajewski.github.io/syauth/tutorials/first-unlock/ to pair your phone and enable the user service.'
+printf '%s\n' 'Installed. PAM configuration is unchanged. Follow https://d3sox.me/syauth/tutorials/first-unlock/ to pair your phone and enable the user service.'

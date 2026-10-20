@@ -1,3 +1,13 @@
+syauth (0.1.1-1) unstable; urgency=medium
+
+  * Publish fork releases from D3SOX/syauth with the fork's Android
+    signing key.
+  * Add the Arch Linux/KDE desktop installer, empty-password KDE unlock,
+    and the combined sudo password/phone prompt.
+  * Restore phone connections after Bluetooth adapter changes.
+
+ -- syauth contributors <noreply@anthropic.com>  Tue, 20 Oct 2026 09:30:00 +0200
+
 syauth (0.1.0-1) unstable; urgency=medium
 
   * Initial release (Closes: #1).

@@ -1,6 +1,5 @@
 """Journey: specs/journeys/JOURNEY-release-publication.md."""
 import importlib.util
-import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -20,22 +19,32 @@ class ReleaseMetadataTests(unittest.TestCase):
         module = self.load_module()
         with tempfile.TemporaryDirectory() as work:
             with self.assertRaisesRegex(ValueError, "missing release artifacts"):
-                module.prepare(Path(work), "0.1.0", "a" * 40)
+                module.prepare(Path(work), "0.1.0", "a" * 40, "D3SOX/syauth")
 
-    def test_complete_release_checksums_cover_exact_bytes_and_source(self):
+    def test_complete_release_records_source_and_artifacts_without_checksum_file(self):
         module = self.load_module()
         with tempfile.TemporaryDirectory() as work:
             directory = Path(work)
             for name in module.required_artifacts("0.1.0"):
                 (directory / name).write_bytes(name.encode())
-            module.prepare(directory, "0.1.0", "a" * 40)
+            module.prepare(directory, "0.1.0", "a" * 40, "D3SOX/syauth")
             manifest = json.loads((directory / "release.json").read_text())
             self.assertEqual(manifest["source_revision"], "a" * 40)
-            lines = (directory / "SHA256SUMS").read_text().splitlines()
-            self.assertEqual(len(lines), len(module.required_artifacts("0.1.0")) + 1)
-            for line in lines:
-                digest, name = line.split("  ")
-                self.assertEqual(digest, hashlib.sha256((directory / name).read_bytes()).hexdigest())
+            self.assertEqual(manifest["repository"], "D3SOX/syauth")
+            self.assertEqual({item["name"] for item in manifest["artifacts"]}, module.required_artifacts("0.1.0"))
+            for item in manifest["artifacts"]:
+                self.assertEqual(item["size"], (directory / item["name"]).stat().st_size)
+            self.assertFalse((directory / "SHA256SUMS").exists())
+
+    def test_repository_must_be_owner_and_name(self):
+        module = self.load_module()
+        with tempfile.TemporaryDirectory() as work:
+            directory = Path(work)
+            for name in module.required_artifacts("0.1.0"):
+                (directory / name).write_bytes(name.encode())
+            for repository in ("", "D3SOX", "D3SOX/syauth/extra", "../syauth"):
+                with self.subTest(repository=repository), self.assertRaisesRegex(ValueError, "repository"):
+                    module.prepare(directory, "0.1.0", "a" * 40, repository)
 
 
 if __name__ == "__main__":

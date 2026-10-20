@@ -12,7 +12,7 @@
 # phone. Built under `mock -r fedora-%%{fedora}-x86_64 deploy/fedora/syauth.spec`
 # or via `make rpm` (which gates on `which mock`).
 
-%global package_version 0.1.0
+%global package_version 0.1.1
 %global rpm_release 4
 %global debug_package %{nil}
 %global min_fedora 39
@@ -163,6 +163,12 @@ fi
 %{_mandir}/man8/syauth.8.gz
 
 %changelog
+* Tue Oct 20 2026 syauth contributors <maintainers@example.invalid> - 0.1.1-4
+- Publish fork releases from D3SOX/syauth with the fork's Android signing key.
+- Add the Arch Linux/KDE desktop installer, empty-password KDE unlock, and the
+  combined sudo password/phone prompt.
+- Restore phone connections after Bluetooth adapter changes.
+
 * Tue Oct 20 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-4
 - Publish native Linux packages, a signed Android APK, and release checksums.
 - Add package-manager installation and published documentation.

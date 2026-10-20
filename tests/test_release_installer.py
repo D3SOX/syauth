@@ -41,11 +41,23 @@ class InstallerTests(unittest.TestCase):
         path.write_text("#!/bin/sh\n" + body + "\n")
         path.chmod(0o755)
 
-    def prepare_network(self, checksum=None):
-        digest = checksum or hashlib.sha256(self.payload).hexdigest()
+    def release_asset(self, name, digest):
+        """Mirror the fields GitHub's release API returns around each asset digest."""
+        asset = {"url": "https://api.github.invalid/assets/1", "id": 1, "name": name, "label": "",
+                 "uploader": {"login": "github-actions[bot]", "name": "Release, bot"},
+                 "content_type": "application/octet-stream", "state": "uploaded", "size": 24}
+        if digest is not None:
+            asset["digest"] = digest
+        asset["browser_download_url"] = f"https://github.invalid/download/{name}"
+        return asset
+
+    def prepare_network(self, checksum=None, assets=None, indent=None):
+        digest = "sha256:" + (checksum or hashlib.sha256(self.payload).hexdigest())
         (self.root / "payload").write_bytes(self.payload)
-        (self.root / "sums").write_text(f"{digest}  {self.asset}\n")
-        (self.root / "release").write_text(json.dumps({"tag_name": "v0.1.1"}))
+        if assets is None:
+            assets = [self.release_asset("install.sh", "sha256:" + "1" * 64),
+                      self.release_asset(self.asset, digest)]
+        (self.root / "release").write_text(json.dumps({"tag_name": "v0.1.1", "assets": assets}, indent=indent))
         self.command("curl", f'''set -eu
 out=
 while [ "$#" -gt 0 ]; do
@@ -54,7 +66,6 @@ done
 printf '%s\\n' "$url" >> '{self.requests}'
 case "$url" in
     */releases/latest|*/releases/tags/v*) source='{self.root}/release';;
-    */SHA256SUMS) source='{self.root}/sums';;
     */{self.asset}) source='{self.root}/payload';;
     *) exit 22;;
 esac
@@ -83,18 +94,35 @@ cp "$source" "$out"
         self.assertFalse(self.calls.exists())
         self.assertEqual(list(self.root.glob("syauth-install.*")), [])
 
-    def test_duplicate_manifest_entry_is_rejected(self):
-        sums = self.root / "sums"
-        sums.write_text(sums.read_text() * 2)
+    def test_duplicate_release_asset_is_rejected(self):
+        asset = self.release_asset(self.asset, "sha256:" + hashlib.sha256(self.payload).hexdigest())
+        self.prepare_network(assets=[asset, asset])
         result = self.run_installer()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.calls.exists())
 
-    def test_missing_exact_entry_cannot_match_filename_prefix(self):
-        sums = self.root / "sums"
-        sums.write_text(sums.read_text().replace(self.asset, self.asset + ".malicious"))
+    def test_missing_exact_asset_cannot_match_filename_prefix(self):
+        digest = "sha256:" + hashlib.sha256(self.payload).hexdigest()
+        self.prepare_network(assets=[self.release_asset(self.asset + ".malicious", digest)])
         self.assertNotEqual(self.run_installer().returncode, 0)
         self.assertFalse(self.calls.exists())
+
+    def test_asset_without_a_github_digest_is_rejected(self):
+        self.prepare_network(assets=[self.release_asset(self.asset, None),
+                                     self.release_asset("install.sh", "sha256:" + "1" * 64)])
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum", result.stderr)
+        self.assertFalse(self.calls.exists())
+
+    def test_pretty_printed_release_json_is_accepted(self):
+        self.prepare_network(indent=2)
+        result = self.run_installer("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_no_separate_checksum_file_is_downloaded(self):
+        self.assertEqual(self.run_installer().returncode, 0)
+        self.assertNotIn("SHA256SUMS", self.requests.read_text())
 
     def test_dry_run_verifies_download_without_manager(self):
         result = self.run_installer("--dry-run")
