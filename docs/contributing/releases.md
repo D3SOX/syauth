@@ -1,6 +1,6 @@
 # Build and publish a release
 
-The [release workflow](https://github.com/dmytrogajewski/syauth/actions/workflows/release.yml) builds native Linux packages and a signed Android APK from the same source revision. A manual workflow run validates and uploads artifacts without creating a public release. A `vMAJOR.MINOR.PATCH` tag publishes after every build and package-install check passes.
+The [release workflow](https://github.com/dmytrogajewski/syauth/actions/workflows/release.yml) builds native Linux packages and a signed Android APK from the same source revision. Pushes to `release/**` branches and manual workflow runs validate and upload artifacts without creating a public release. A `vMAJOR.MINOR.PATCH` tag publishes after every build and package-install check passes.
 
 ## Artifact contract
 
