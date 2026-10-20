@@ -155,7 +155,7 @@ Design the Customer Journey Map:
 4. Friction map. Where is the friction? What opportunities exist to reduce it?
 5. Expected outcome. What does the ideal end state look like?
 
-Use the journey template in `.agents/instructions/instr-journey.md` as a structural reference for CJM sections.
+Use the journey template in `.agents/skills/journey/SKILL.md` as a structural reference for CJM sections.
 
 ---
 

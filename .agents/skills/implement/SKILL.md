@@ -41,7 +41,7 @@ Your task is to complete each step in order:
 1. Read the document
 2. Take the first item (feature) from the roadmap
 3. Read all docs in docs/ and understand the clippy configuration so you write code correctly
-4. Write a journey document and put it in specs/journeys/JOURNEY-{id}.md. See [instr-journey.md](instr-journey.md)
+4. Write a journey document and put it in specs/journeys/JOURNEY-{id}.md. See [the journey template](../journey/SKILL.md)
 5. Read the journey document
 6. Write tests (min 90% coverage)
 7. Write implementation. If you know popular, actively maintained crates that help, use them. Otherwise write your own.
