@@ -90,7 +90,7 @@ python3 -m unittest discover -s tests -p 'test_release_*.py'
 python3 -m unittest discover -s tests -p test_installer.py
 ```
 
-See [documentation development](docs/contributing/documentation.md), [release development](docs/contributing/releases.md), and [AGENTS.md](AGENTS.md) for contributor contracts. Open an [issue](https://github.com/D3SOX/syauth/issues) with reproduction steps and sanitized diagnostics, or a pull request with the user-visible change and relevant test evidence. Avoid posting bond files, private keys, or unreviewed logs.
+See [documentation development](docs/contributing/documentation.md), and [release development](docs/contributing/releases.md) for contributor contracts. Open an [issue](https://github.com/D3SOX/syauth/issues) with reproduction steps and sanitized diagnostics, or a pull request with the user-visible change and relevant test evidence. Avoid posting bond files, private keys, or unreviewed logs.
 
 ## Maintainers
 

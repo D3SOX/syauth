@@ -83,7 +83,7 @@ lint: scope-discipline
 	$(CARGO) deny check
 	@echo "Linting complete"
 
-# Scope Discipline (AGENTS.md, non-negotiable): no invented scope
+# Scope discipline: no invented scope
 # vocabulary in production source. Banned phrases must not appear
 # under crates/ or syauth-android/app/src/main/. The only way to ship
 # a deviation from SPEC §3.2 D1-D8 / §3.3 ML "IN — v0.1.0" is the
@@ -98,7 +98,7 @@ scope-discipline:
 	    ':!:*tests/*' ':!:*test/*' ':!:*build/*' ':!:*target/*'; then \
 	  echo ""; \
 	  echo "SCOPE-DISCIPLINE: forbidden phrases above are not anchored in specs/."; \
-	  echo "  Either remove them, or run the SPEC-DEVIATION procedure in AGENTS.md."; \
+	  echo "  Either remove them, or mark a SPEC-DEVIATION and record it in docs/known-gaps.md."; \
 	  exit 1; \
 	fi
 	@echo "Scope-discipline grep clean."

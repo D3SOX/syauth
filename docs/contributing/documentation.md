@@ -39,7 +39,7 @@ Link between these page types instead of mixing a tutorial with an exhaustive fl
 
 Read the active caller path, not just helper functions or design comments. The mechanism pages pin their source links to revision `648375e` so the documented observations are reviewable. When behavior changes, update both prose and the corresponding animation in `docs/javascripts/mechanics.js`, then re-run browser checks.
 
-For protocol, pairing, storage, or PAM policy changes, also follow `AGENTS.md` and the specification gate. Documentation must not silently redefine SPEC §3.2 D1–D8. Describe verified discrepancies explicitly; do not convert a design target into an implementation claim.
+For protocol, pairing, storage, or PAM policy changes, also follow the specification gate in `specs/syauth/SPEC.md`. Documentation must not silently redefine SPEC §3.2 D1–D8. Describe verified discrepancies explicitly; do not convert a design target into an implementation claim.
 
 ## Visual and accessibility contracts
 
