@@ -46,3 +46,13 @@ Existing authentication mechanics and specification decisions remain unchanged.
 - `make lint` passes with the three existing allowed dependency maintenance advisories. `make test` passes with 447 passed and 9 ignored.
 - GitHub Pages is configured to use Actions; the repository homepage points to `https://dmytrogajewski.github.io/syauth/`. The `release` environment holds the persistent Android signing secrets, with a private backup outside the repository.
 - The first hosted Android setup failed because the setup action's default package list includes the removed SDK package `tools`. The workflow explicitly requests `platform-tools`; platform, Build Tools, and NDK versions remain pinned in the following step.
+
+## Published result
+
+- [PR #3](https://github.com/dmytrogajewski/syauth/pull/3) merged at `285ccf4fadee4a0e88826dc3fe6cefc4e79cd2f3`; annotated tag `v0.1.0` points to that commit.
+- [The tagged release workflow](https://github.com/dmytrogajewski/syauth/actions/runs/39347479789) passed both Linux builds, all seven distribution-install probes, the four-ABI signed Android build, artifact assembly, and publication.
+- [Release v0.1.0](https://github.com/dmytrogajewski/syauth/releases/tag/v0.1.0) is public with 15 assets. Downloaded files pass all 14 entries in `SHA256SUMS`; `release.json` records the tagged merge commit.
+- The downloaded APK passes `apksigner verify`, matches the pinned certificate, and contains the owner's exact logo pixels (`compare -metric AE` reports zero).
+- The live Pages home, three illustrated mechanics scenes, chapter controls, and search pass a browser probe with no JavaScript errors. Published installer, image, JavaScript, and CSS bytes match their committed sources.
+- Fetching the live installer and running `--dry-run` resolves the public latest release, downloads and verifies `syauth-0.1.0-4.x86_64.rpm`, and selects `dnf` without changing the developer machine.
+- The documentation follow-up adds direct published APK/checksum links to the home page and pins the README APK link to its matching versioned release.
