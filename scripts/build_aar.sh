@@ -21,6 +21,7 @@ MOBILE_DIR="${PROJECT_ROOT}/crates/syauth-mobile"
 OUTPUT_DIR="${MOBILE_DIR}/target"
 BINDINGS_DIR="${MOBILE_DIR}/bindings/kotlin"
 UDL_FILE="${MOBILE_DIR}/src/mobile.udl"
+BINDGEN_MANIFEST="${PROJECT_ROOT}/tools/uniffi-bindgen/Cargo.toml"
 
 PROFILE="${DEBUG:+debug}"
 PROFILE="${PROFILE:-release}"
@@ -61,13 +62,13 @@ if ! command -v cargo &> /dev/null; then
 fi
 
 if [ "${DRY_RUN}" = "1" ]; then
-    echo "==> DRY_RUN=1: skipping NDK / cargo-ndk / uniffi-bindgen checks"
+    echo "==> DRY_RUN=1: skipping NDK / cargo-ndk checks"
     echo "    Would build the following targets and package:"
     for target in "${!ANDROID_TARGETS[@]}"; do
         echo "      - ${target} (${ANDROID_TARGETS[$target]}) -> ${LIB_NAME}"
     done
     echo "    Would generate Kotlin bindings:"
-    echo "      uniffi-bindgen generate ${UDL_FILE} --language kotlin --out-dir ${BINDINGS_DIR}"
+    echo "      cargo run --manifest-path ${BINDGEN_MANIFEST} --locked --release -- generate ${UDL_FILE} --language kotlin --out-dir ${BINDINGS_DIR}"
     echo "    Would package:"
     echo "      ${OUTPUT_DIR}/${AAR_NAME}"
     echo "==> DRY_RUN complete (no artifacts produced)"
@@ -96,12 +97,6 @@ if ! command -v cargo-ndk &> /dev/null; then
     exit 1
 fi
 
-if ! command -v uniffi-bindgen &> /dev/null; then
-    echo "Error: uniffi-bindgen not found" >&2
-    echo "Install with: cargo install uniffi-bindgen --version 0.29" >&2
-    exit 1
-fi
-
 # Verify rust Android targets are installed.
 for target in "${!ANDROID_TARGETS[@]}"; do
     if ! rustup target list --installed | grep -q "^${target}$"; then
@@ -120,7 +115,7 @@ for target in "${!ANDROID_TARGETS[@]}"; do
     echo "  -> ${target}"
     (
         cd "${PROJECT_ROOT}"
-        cargo ndk -t "${target}" build -p syauth-mobile ${PROFILE_FLAG}
+        cargo ndk -t "${target}" --platform 26 build --locked -p syauth-mobile ${PROFILE_FLAG}
     )
 done
 
@@ -132,7 +127,8 @@ echo "==> Generating Kotlin bindings"
 mkdir -p "${BINDINGS_DIR}"
 (
     cd "${MOBILE_DIR}"
-    uniffi-bindgen generate "${UDL_FILE}" --language kotlin --out-dir "${BINDINGS_DIR}"
+    cargo run --manifest-path "${BINDGEN_MANIFEST}" --target-dir "${PROJECT_ROOT}/target/uniffi-bindgen" --locked --release -- \
+        generate "${UDL_FILE}" --language kotlin --out-dir "${BINDINGS_DIR}"
 )
 
 # ---------------------------------------------------------------------------
@@ -170,7 +166,10 @@ EOF
 # the Kotlin bindings live in `bindings/kotlin/` and the Android app
 # brings them in as source).
 mkdir -p "${AAR_BUILD_DIR}/classes"
-(cd "${AAR_BUILD_DIR}/classes" && jar cf ../classes.jar . 2>/dev/null || zip -q ../classes.jar .)
+(
+    cd "${AAR_BUILD_DIR}/classes"
+    jar cf ../classes.jar .
+)
 rm -rf "${AAR_BUILD_DIR}/classes"
 
 # R.txt: empty (no Android resources in this AAR).
@@ -186,8 +185,4 @@ echo "==> Build complete"
 echo "    AAR:      ${AAR_PATH}"
 echo "    Bindings: ${BINDINGS_DIR}"
 echo ""
-echo "To consume from Android Studio:"
-echo "  1. Copy ${AAR_NAME} into syauth-android/app/libs/"
-echo "  2. In app/build.gradle.kts: implementation(files(\"libs/${AAR_NAME}\"))"
-echo "  3. Copy the generated Kotlin file(s) from ${BINDINGS_DIR} into"
-echo "     syauth-android/app/src/main/kotlin/uniffi/syauth_mobile/."
+echo "The Android Gradle project consumes this AAR and generated Kotlin bindings directly."

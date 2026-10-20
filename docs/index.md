@@ -14,6 +14,7 @@ Approve Linux authentication on your Android phone. syauth carries a fresh chall
 
 [Set up syauth](how-to/install.md){ .md-button .md-button--primary }
 [See the mechanics](explanation/mechanics.md){ .md-button }
+[Download a release](https://github.com/dmytrogajewski/syauth/releases/latest){ .md-button }
 
 </div>
 </div>

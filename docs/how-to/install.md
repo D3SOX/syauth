@@ -4,13 +4,58 @@ This guide sets up the desktop daemon and Android companion, then explains how t
 
 ## Prerequisites
 
-Use Linux with PAM, systemd user services, BlueZ, and a BLE adapter capable of advertising. You need a Rust toolchain compatible with `Cargo.lock`, a C toolchain, `pkg-config`, and the development packages for D-Bus, PAM, and Bluetooth. On Debian-based systems those packages are `libdbus-1-dev`, `libpam0g-dev`, and `libbluetooth-dev`.
+Use Linux with glibc 2.36+, PAM, systemd user services, BlueZ, and a BLE adapter capable of advertising. Release packages target Debian 12+, Ubuntu 24.04+, and current Fedora, openSUSE, and Arch systems. Both x86_64 and ARM64 artifacts are available; the tested distribution/CPU matrix is listed in [release development](../contributing/releases.md#artifact-contract).
 
 For the phone, use Android 13 / API 33 or later, a supported Ed25519 Keystore implementation, and an enrolled strong biometric. Hardware support varies; StrongBox is requested with a non-StrongBox Keystore fallback. A PIN alone cannot satisfy the unlock signing prompt.
 
 Before enabling PAM, read [security boundaries](../explanation/security.md). Keep an authenticated administrator session open and retain your distribution's existing recovery method while testing.
 
-## Build the desktop
+## Install a release package
+
+Install the latest release with your native package manager:
+
+```sh
+curl -fsSL https://dmytrogajewski.github.io/syauth/install.sh | sh
+```
+
+The POSIX shell installer reads your distribution and architecture, resolves one GitHub release tag, downloads that tag's package and `SHA256SUMS`, checks the exact package digest, then invokes `apt`, `dnf`, `zypper`, or `pacman`. It requests `sudo` when necessary. An unsupported system or checksum mismatch stops installation. It does not change PAM stacks, enable services, or change existing bond ownership.
+
+To inspect the script, select a version, or preview package selection:
+
+```sh
+curl -fsSLo install-syauth.sh https://dmytrogajewski.github.io/syauth/install.sh
+less install-syauth.sh
+sh install-syauth.sh --version 0.1.0 --dry-run
+sh install-syauth.sh --version 0.1.0
+```
+
+### Direct downloads
+
+The [v0.1.0 release](https://github.com/dmytrogajewski/syauth/releases/tag/v0.1.0) has the native packages, manual archives, source, signed APK, and checksums. For example, on Debian/Ubuntu x86_64:
+
+```sh
+release=https://github.com/dmytrogajewski/syauth/releases/download/v0.1.0
+curl -fSLO "$release/syauth_0.1.0_amd64.deb"
+curl -fSLO "$release/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+sudo apt install ./syauth_0.1.0_amd64.deb
+```
+
+Choose the corresponding artifact for other native managers, verify it against the same checksum file, then install it:
+
+| System | x86_64 artifact | Install command |
+| --- | --- | --- |
+| Fedora | `syauth-0.1.0-4.x86_64.rpm` | `sudo dnf install ./syauth-0.1.0-4.x86_64.rpm` |
+| openSUSE | `syauth-0.1.0-4.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./syauth-0.1.0-4.x86_64.rpm` |
+| Arch | `syauth-0.1.0-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./syauth-0.1.0-1-x86_64.pkg.tar.zst` |
+
+For ARM64, use the DEB ending in `_arm64.deb`, or the RPM/Arch filename with `aarch64` replacing `x86_64`. The RPM is checksum-verified rather than RPM-signed; the openSUSE command permits that local unsigned RPM without disabling repository checks. These are downloadable native packages, not registered APT/DNF repositories or an AUR listing. Repeat the shell installer to fetch and install a newer release.
+
+Packages install `/usr/bin/syauth`, `/usr/libexec/syauth-presenced`, the distribution's `pam_syauth.so`, and `/usr/lib/systemd/user/syauth-presenced.service`. Continue with storage preparation below.
+
+## Build the desktop from source
+
+Source builds additionally require a Rust toolchain compatible with `Cargo.lock`, a C toolchain, `pkg-config`, and development packages for D-Bus, PAM, and Bluetooth (`libdbus-1-dev`, `libpam0g-dev`, and `libbluetooth-dev` on Debian).
 
 From a checkout of syauth:
 
@@ -47,7 +92,14 @@ sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" \
 
 Do not give multiple accounts ownership of the same store. Existing installations should retain their intended ownership; inspect the paths with `syauth doctor` before changing permissions.
 
-Write the user unit using the already installed binary, then activate it as your desktop user:
+For a package installation, the user unit is already installed. Reload and activate it as your desktop user:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now syauth-presenced.service
+```
+
+For a source installation under `/usr/local`, write a user unit using the installed binary first:
 
 ```sh
 syauth install-presenced --dry-run \
@@ -60,18 +112,27 @@ The `--dry-run` command **writes the unit file** but skips the binary copy and `
 
 ## Install the Android app
 
-Use an APK from a [release](https://github.com/dmytrogajewski/syauth/releases) if a suitable artifact is available. To build from source, provide Android SDK platform 34, a JDK compatible with the checked-in Gradle wrapper, the Android NDK, `cargo-ndk`, the four Rust Android targets required by `scripts/build_aar.sh`, and UniFFI bindgen 0.29 matching the Rust dependency.
+Download the [signed Android APK](https://github.com/dmytrogajewski/syauth/releases/download/v0.1.0/syauth-0.1.0-android.apk) and [SHA256SUMS](https://github.com/dmytrogajewski/syauth/releases/download/v0.1.0/SHA256SUMS). Verify the downloaded file before opening it on your phone, or install it with ADB:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+adb install -r syauth-0.1.0-android.apk
+```
+
+With Android SDK Build Tools installed, verify the signature using `apksigner verify --verbose --print-certs syauth-0.1.0-android.apk`. Compare its SHA-256 certificate digest with the [published release signing identity](../contributing/releases.md#android-builds-and-signing). The private signing key is retained across releases. A debug APK uses a different identity and must be uninstalled before installing this release; uninstalling removes its local app data and requires pairing again.
+
+To build from source, provide Android SDK platform 34, JDK 21, NDK 28.0.13004108, cargo-ndk 4.1.2, and the four Rust Android targets required by `scripts/build_aar.sh`. Its checked-in helper generates the matching UniFFI 0.29.5 bindings.
 
 Set `NDK_HOME` to your installed NDK, then run:
 
 ```sh
-make android-aar
+scripts/build_aar.sh
 cd syauth-android
 ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Confirm the AAR exists at `crates/syauth-mobile/target/syauth_mobile.aar` before running Gradle. The Make target can skip on an incomplete toolchain; a skipped build is not an APK build.
+Confirm the AAR exists at `crates/syauth-mobile/target/syauth_mobile.aar` before running Gradle. See [release builds](../contributing/releases.md) for the signing workflow.
 
 Open the app and grant the requested Bluetooth and notification permissions. Complete the companion-device and battery-optimization prompts presented by setup. Manufacturer background restrictions can affect delivery even after these grants.
 
