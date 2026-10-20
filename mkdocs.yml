@@ -1,4 +1,5 @@
 site_name: syauth
+site_url: https://dmytrogajewski.github.io/syauth/
 site_description: Understand and operate phone-approved Linux authentication.
 docs_dir: docs
 site_dir: target/docs-site
@@ -65,3 +66,4 @@ nav:
       - Security: explanation/security.md
   - Contributing:
       - Documentation: contributing/documentation.md
+      - Releases: contributing/releases.md

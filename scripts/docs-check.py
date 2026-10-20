@@ -15,9 +15,11 @@ import subprocess
 import sys
 
 from playwright.sync_api import expect, sync_playwright
+from yaml import safe_load
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / "target" / "docs-site"
+SITE_PREFIX = urlsplit(safe_load((ROOT / "mkdocs.yml").read_text()).get("site_url", "")).path.rstrip("/")
 PREVIEW = ROOT / "target" / "docs-preview"
 MECHANICS = "explanation/mechanics/"
 LAST_STAGES = {
@@ -56,7 +58,10 @@ def check_links():
                 continue
             target = (path.parent / unquote(link.path)).resolve() if link.path else path
             if link.path.startswith("/"):
-                target = (SITE / unquote(link.path).lstrip("/")).resolve()
+                site_path = unquote(link.path)
+                if SITE_PREFIX and site_path.startswith(SITE_PREFIX + "/"):
+                    site_path = site_path[len(SITE_PREFIX):]
+                target = (SITE / site_path.lstrip("/")).resolve()
             if target.is_dir():
                 target /= "index.html"
             assert target.is_relative_to(SITE), f"Link escapes site: {path}: {href}"

@@ -13,7 +13,7 @@
 # or via `make rpm` (which gates on `which mock`).
 
 %global package_version 0.1.0
-%global rpm_release 3
+%global rpm_release 4
 %global debug_package %{nil}
 %global min_fedora 39
 
@@ -163,6 +163,10 @@ fi
 %{_mandir}/man8/syauth.8.gz
 
 %changelog
+* Tue Oct 20 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-4
+- Publish native Linux packages, a signed Android APK, and release checksums.
+- Add package-manager installation and published documentation.
+
 * Sun Oct 18 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-3
 - Use standard BlueZ notifications across phone reconnection.
 - Correct the user unit's documentation URL.
