@@ -4,37 +4,39 @@
 
 Approve Linux authentication on your Android phone with a fresh strong biometric. syauth connects a Linux PAM module, a desktop Bluetooth daemon, and an Android companion that signs each request through Android Keystore.
 
-[Documentation](https://dmytrogajewski.github.io/syauth/) · [Downloads](https://github.com/dmytrogajewski/syauth/releases/latest) · [How it works](https://dmytrogajewski.github.io/syauth/explanation/mechanics/) · [Security boundaries](https://dmytrogajewski.github.io/syauth/explanation/security/)
+This is the [D3SOX fork](https://d3sox.me/syauth/fork/) of [dmytrogajewski/syauth](https://github.com/dmytrogajewski/syauth). It adds an Arch Linux/KDE desktop installer, empty-password KDE unlock, a combined sudo password/phone prompt, live lockscreen status, and connection recovery fixes. The fork publishes its own releases.
+
+[Documentation](https://d3sox.me/syauth/) · [Fork changes](https://d3sox.me/syauth/fork/) · [Downloads](https://github.com/D3SOX/syauth/releases/latest) · [How it works](https://d3sox.me/syauth/explanation/mechanics/) · [Security boundaries](https://d3sox.me/syauth/explanation/security/)
 
 ## Install
 
 On a supported Linux desktop:
 
 ```sh
-curl -fsSL https://dmytrogajewski.github.io/syauth/install.sh | sh
+curl -fsSL https://d3sox.me/syauth/install.sh | sh
 ```
 
-The installer resolves the latest release, chooses the native package for your distribution and CPU, checks its SHA-256 checksum, and installs it with `apt`, `dnf`, `zypper`, or `pacman`. It requests `sudo` when needed. It leaves PAM configuration and service activation to you.
+The installer resolves the latest release, chooses the native package for your distribution and CPU, checks it against GitHub's SHA-256 digest for that asset, and installs it with `apt`, `dnf`, `zypper`, or `pacman`. It requests `sudo` when needed. It leaves PAM configuration and service activation to you.
 
 Prefer to review the script first?
 
 ```sh
-curl -fsSLo install-syauth.sh https://dmytrogajewski.github.io/syauth/install.sh
+curl -fsSLo install-syauth.sh https://d3sox.me/syauth/install.sh
 less install-syauth.sh
 sh install-syauth.sh --dry-run
 sh install-syauth.sh
 ```
 
-Release downloads include DEB, RPM, Arch Linux packages, and manual Linux archives for x86_64 and ARM64, plus a signed [Android APK](https://github.com/dmytrogajewski/syauth/releases/download/v0.1.0/syauth-0.1.0-android.apk), source archive, signing certificate, build metadata, and `SHA256SUMS`. See [installation and verification](https://dmytrogajewski.github.io/syauth/how-to/install/) for direct package commands and version-pinned downloads.
+Release downloads include DEB, RPM, Arch Linux packages, and manual Linux archives for x86_64 and ARM64, plus a signed [Android APK](https://github.com/D3SOX/syauth/releases/download/v0.1.1/syauth-0.1.1-android.apk), source archive, signing certificate, and build metadata. GitHub shows each asset's SHA-256 digest; the installer verifies against it. See [installation and verification](https://d3sox.me/syauth/how-to/install/) for direct package commands and version-pinned downloads.
 
 Use Debian 12+, Ubuntu 24.04+, a current Fedora/openSUSE/Arch installation, or a compatible derivative, with glibc 2.36+, PAM, systemd user services, BlueZ, and a BLE adapter capable of advertising. The phone needs Android 13+ with a supported Ed25519 Keystore implementation and an enrolled strong biometric. The APK can install on older Android versions, but that does not establish signing-key support.
 
 ## Use
 
 1. Install the desktop package and signed Android companion.
-2. Follow [storage and user-service setup](https://dmytrogajewski.github.io/syauth/how-to/install/#prepare-storage-and-the-user-service).
+2. Follow [storage and user-service setup](https://d3sox.me/syauth/how-to/install/#prepare-storage-and-the-user-service).
 3. Run `syauth pair`, complete numeric comparison on both devices, and confirm the bond with `syauth list`.
-4. Read the [PAM policy reference](https://dmytrogajewski.github.io/syauth/reference/configuration/#pam-policy), configure one service, and complete [your first unlock](https://dmytrogajewski.github.io/syauth/tutorials/first-unlock/).
+4. Read the [PAM policy reference](https://d3sox.me/syauth/reference/configuration/#pam-policy), configure one service, and complete [your first unlock](https://d3sox.me/syauth/tutorials/first-unlock/).
 
 ```sh
 syauth pair
@@ -42,7 +44,7 @@ syauth list
 syauth doctor
 ```
 
-Being nearby prepares the connection; each authentication still needs explicit approval and a strong biometric. Keep the existing recovery method available while configuring PAM. The [security guide](https://dmytrogajewski.github.io/syauth/explanation/security/) describes the current implementation's differences from the design specification, including bond derivation and desktop key storage.
+Being nearby prepares the connection; each authentication still needs explicit approval and a strong biometric. Keep the existing recovery method available while configuring PAM. The [security guide](https://d3sox.me/syauth/explanation/security/) describes the current implementation's differences from the design specification, including bond derivation and desktop key storage.
 
 ## Arch Linux and KDE Plasma from source
 
@@ -61,11 +63,11 @@ On restart the daemon can disconnect and reconnect one explicitly configured pho
 
 ## Documentation
 
-- [First unlock tutorial](https://dmytrogajewski.github.io/syauth/tutorials/first-unlock/)
-- [Install](https://dmytrogajewski.github.io/syauth/how-to/install/), [pair and revoke](https://dmytrogajewski.github.io/syauth/how-to/pair-and-revoke/), [troubleshoot](https://dmytrogajewski.github.io/syauth/how-to/troubleshoot/)
-- [CLI](https://dmytrogajewski.github.io/syauth/reference/cli/), [configuration](https://dmytrogajewski.github.io/syauth/reference/configuration/), [protocol](https://dmytrogajewski.github.io/syauth/reference/protocol/)
-- [Illustrated mechanics](https://dmytrogajewski.github.io/syauth/explanation/mechanics/) with animated pairing, discovery, and unlock
-- [Release builds and signing](https://dmytrogajewski.github.io/syauth/contributing/releases/)
+- [First unlock tutorial](https://d3sox.me/syauth/tutorials/first-unlock/)
+- [Install](https://d3sox.me/syauth/how-to/install/), [pair and revoke](https://d3sox.me/syauth/how-to/pair-and-revoke/), [troubleshoot](https://d3sox.me/syauth/how-to/troubleshoot/)
+- [CLI](https://d3sox.me/syauth/reference/cli/), [configuration](https://d3sox.me/syauth/reference/configuration/), [protocol](https://d3sox.me/syauth/reference/protocol/)
+- [Illustrated mechanics](https://d3sox.me/syauth/explanation/mechanics/) with animated pairing, discovery, and unlock
+- [Release builds and signing](https://d3sox.me/syauth/contributing/releases/)
 
 ## Development and contributing
 
@@ -79,11 +81,11 @@ python3 -m unittest discover -s tests -p 'test_release_*.py'
 python3 -m unittest discover -s tests -p test_installer.py
 ```
 
-See [documentation development](docs/contributing/documentation.md), [release development](docs/contributing/releases.md), and [AGENTS.md](AGENTS.md) for contributor contracts. Open an [issue](https://github.com/dmytrogajewski/syauth/issues) with reproduction steps and sanitized diagnostics, or a pull request with the user-visible change and relevant test evidence. Avoid posting bond files, private keys, or unreviewed logs.
+See [documentation development](docs/contributing/documentation.md), [release development](docs/contributing/releases.md), and [AGENTS.md](AGENTS.md) for contributor contracts. Open an [issue](https://github.com/D3SOX/syauth/issues) with reproduction steps and sanitized diagnostics, or a pull request with the user-visible change and relevant test evidence. Avoid posting bond files, private keys, or unreviewed logs.
 
 ## Maintainers
 
-Maintained by [dmytrogajewski](https://github.com/dmytrogajewski) and contributors.
+This fork is maintained by [D3SOX](https://github.com/D3SOX). Upstream syauth is maintained by [dmytrogajewski](https://github.com/dmytrogajewski) and contributors.
 
 ## License
 

@@ -14,14 +14,16 @@ Approve Linux authentication on your Android phone. syauth carries a fresh chall
 
 [Set up syauth](how-to/install.md){ .md-button .md-button--primary }
 [See the mechanics](explanation/mechanics.md){ .md-button }
-[Download a release](https://github.com/dmytrogajewski/syauth/releases/latest){ .md-button }
+[Download a release](https://github.com/D3SOX/syauth/releases/latest){ .md-button }
 
 </div>
 </div>
 
 ## Install the release
 
-Install the desktop with `curl -fsSL https://dmytrogajewski.github.io/syauth/install.sh | sh`, then follow [installation and setup](how-to/install.md). The [published v0.1.0 assets](https://github.com/dmytrogajewski/syauth/releases/tag/v0.1.0) include DEB/RPM/Arch packages for both CPU architectures, the [signed Android companion](https://github.com/dmytrogajewski/syauth/releases/download/v0.1.0/syauth-0.1.0-android.apk), and [checksums](https://github.com/dmytrogajewski/syauth/releases/download/v0.1.0/SHA256SUMS).
+This site documents the [D3SOX fork](fork.md), which adds an Arch Linux/KDE desktop installer, empty-password KDE unlock, a combined sudo password/phone prompt, live lockscreen status, and connection recovery fixes.
+
+Install the desktop with `curl -fsSL https://d3sox.me/syauth/install.sh | sh`, then follow [installation and setup](how-to/install.md). The [published v0.1.1 assets](https://github.com/D3SOX/syauth/releases/tag/v0.1.1) include DEB/RPM/Arch packages for both CPU architectures and the [signed Android companion](https://github.com/D3SOX/syauth/releases/download/v0.1.1/syauth-0.1.1-android.apk); GitHub lists a SHA-256 digest for each.
 
 ## Follow one unlock
 
@@ -65,4 +67,4 @@ Use Android 13 or later with a supported Ed25519 Android Keystore implementation
 
 These pages describe the implementation, including its limitations. In particular, the current bond derivation is not the hybrid key exchange described in the design specification, and the desktop stores application bond material in files. Read [the implementation boundaries](explanation/security.md#implementation-and-design) before enabling PAM.
 
-[Source code](https://github.com/dmytrogajewski/syauth) · [Report a problem](https://github.com/dmytrogajewski/syauth/issues) · [Build these docs](contributing/documentation.md)
+[Source code](https://github.com/D3SOX/syauth) · [Report a problem](https://github.com/D3SOX/syauth/issues) · [Build these docs](contributing/documentation.md)

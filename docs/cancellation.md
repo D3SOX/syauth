@@ -44,4 +44,4 @@ activity tests cover cancellation during biometrics, a late success callback,
 wrong nonce, failed verification, and cancellation before activity launch.
 
 The original bug is documented in
-[Pending approval survives password unlock](../specs/bugs/BUG-2026-10-08-cancel-approval.md).
+[Pending approval survives password unlock](https://github.com/D3SOX/syauth/blob/master/specs/bugs/BUG-2026-10-08-cancel-approval.md).

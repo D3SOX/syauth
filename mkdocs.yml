@@ -1,17 +1,14 @@
 site_name: syauth
-site_url: https://dmytrogajewski.github.io/syauth/
+site_url: https://d3sox.me/syauth/
 site_description: Understand and operate phone-approved Linux authentication.
 docs_dir: docs
 site_dir: target/docs-site
 strict: true
 exclude_docs: |
-  /android-setup.md
   /security.md
   /known-gaps.md
   /release-process.md
   /perf-baselines.md
-  /bluetooth.md
-  /arch-update-check.md
 theme:
   name: material
   language: en
@@ -46,10 +43,18 @@ extra:
   generator: false
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/dmytrogajewski/syauth
+      link: https://github.com/D3SOX/syauth
       name: syauth on GitHub
 nav:
   - Start here: index.md
+  - Fork changes: fork.md
+  - Arch Linux and KDE:
+      - Install on Arch Linux: getting-started.md
+      - sudo and KDE screen unlock: pam.md
+      - Approval cancellation: cancellation.md
+      - Package update checks: arch-update-check.md
+      - Android companion: android-setup.md
+      - Bluetooth recovery: bluetooth.md
   - Tutorial:
       - Your first unlock: tutorials/first-unlock.md
   - How-to:
