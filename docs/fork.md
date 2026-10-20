@@ -4,7 +4,7 @@ This site documents [D3SOX/syauth](https://github.com/D3SOX/syauth), a fork of [
 
 ## Arch Linux and KDE Plasma desktop
 
-- **Desktop installer.** `python3 scripts/install.py` builds the desktop binaries, installs the PAM module, configures sudo and KDE screen unlock, enables the user daemon, and keeps backups for `rollback`. `--android SERIAL` also builds and installs the phone app over ADB. See [scripted installation](getting-started.md#install-with-the-script).
+- **One installer.** `install.sh` installs the verified release package or, with `--source`, builds and installs a local package. `--desktop` configures sudo and KDE screen unlock, live lockscreen status, and the user daemon, and keeps backups for `rollback`. `--android SERIAL` installs the phone app over ADB. See [scripted installation](getting-started.md#install-with-the-script).
 - **Empty-password KDE unlock.** With the `on_empty_password` PAM option, pressing Enter in an empty lockscreen password field requests phone approval. Typing a password uses normal password authentication. See [KDE: request the phone with an empty submission](pam.md#kde-request-the-phone-with-an-empty-submission).
 - **Combined sudo prompt.** With `terminal_prompt`, sudo accepts a password while phone approval waits. Approval finishes without Enter, and submitting a password dismisses the phone request. `pwfeedback` shows asterisks. See [password entry while phone approval waits](pam.md#password-entry-while-phone-approval-waits).
 - **Live lockscreen status.** On Plasma 6.8, the lockscreen shows whether the phone is connected and when an approval is pending. See [live phone status](pam.md#live-phone-status-on-the-lockscreen).

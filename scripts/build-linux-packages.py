@@ -35,6 +35,13 @@ def package_config(version, arch, kind, binaries):
         (ROOT / "LICENSE", "/usr/share/doc/syauth/copyright" if kind == "deb"
          else "/usr/share/licenses/syauth/LICENSE", 0o644),
         (ROOT / "README.md", "/usr/share/doc/syauth/README.md", 0o644),
+        # The installer and its helpers, so rollback, pairing, and desktop
+        # setup work without a checkout.
+        (ROOT / "scripts/install.sh", "/usr/lib/syauth/install.sh", 0o755),
+        (ROOT / "scripts/install-kde-status.py", "/usr/lib/syauth/install-kde-status", 0o755),
+        (ROOT / "scripts/check-pam-update.py", "/usr/lib/syauth/check-pam-update", 0o755),
+        (ROOT / "deploy/kde/PhoneStatus.qml", "/usr/share/syauth/kde/PhoneStatus.qml", 0o644),
+        (ROOT / "deploy/arch/95-syauth-check.hook", "/usr/share/syauth/pacman/95-syauth-check.hook", 0o644),
     ):
         contents.append({"src": str(source), "dst": dest,
                          "file_info": {"mode": mode}})

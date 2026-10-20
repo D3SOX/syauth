@@ -25,5 +25,5 @@ Target = usr/lib/libcap-ng.so*
 [Action]
 Description = Checking syauth PAM configuration and module dependencies...
 When = PostTransaction
-Exec = /usr/local/libexec/syauth-update-check
+Exec = /usr/lib/syauth/check-pam-update
 Depends = python

@@ -462,7 +462,7 @@ transaction. A real CLI subprocess verifies that an absent private baseline
 returns actionable status 2 without creating files or requiring pacman.
 
 Implementation and traceability: `scripts/check-pam-update.py`,
-`deploy/arch/{95-syauth-check.hook,install-update-check.sh}`,
+`deploy/arch/95-syauth-check.hook`, the `update-check` command in `scripts/install.sh`,
 `tests/test_pam_update_check.py`, `.github/workflows/ci.yml`, and
 `docs/arch-update-check.md`. Tests use private files and mocked system commands;
 the optional installer is never executed on the development host.

@@ -14,29 +14,29 @@ transaction completes. This integration comes from
 ## Install after testing authentication
 
 First test sudo, phone approval using your configured lockscreen trigger,
-password authentication, and password fallback after a phone timeout. From the
-repository root, install the checker:
+password authentication, and password fallback after a phone timeout. Then
+enable the checker that the syauth package ships:
 
 ```sh
-sudo bash deploy/arch/install-update-check.sh
+sh /usr/lib/syauth/install.sh update-check
 ```
 
-The installer preserves the PAM setup and adds:
+The installer preserves the PAM setup and uses or adds:
 
-- `/usr/local/libexec/syauth-update-check`, using the Python standard library.
+- `/usr/lib/syauth/check-pam-update`, from the syauth package, using the Python standard library.
 - `/etc/pacman.d/hooks/95-syauth-check.hook`, the pacman hook.
 - `/var/lib/syauth-update-check/baseline.json`, hashes and package versions from the tested setup.
 
-Installation refuses an existing checker, hook, or baseline directory, and enables
-the hook only after baseline recording and the initial check succeed. Failure
-removes the newly created checker, hook, and baseline.
+Installation refuses an existing hook or baseline directory, and enables the
+hook only after baseline recording and the initial check succeed. Failure
+removes the newly created hook and baseline.
 
 ## Review findings and accept a baseline
 
 Run checks as your desktop user:
 
 ```sh
-/usr/local/libexec/syauth-update-check
+/usr/lib/syauth/check-pam-update
 ```
 
 The checker reports changed or missing local PAM files, changed packaged
@@ -55,7 +55,7 @@ Review findings, compare packaged defaults with local overrides, resolve relevan
 the accepted state:
 
 ```sh
-sudo /usr/local/libexec/syauth-update-check --record-baseline
+sudo /usr/lib/syauth/check-pam-update --record-baseline
 ```
 
 Recording refuses missing watched packages, unresolved `.pacnew` files, or a
@@ -69,11 +69,10 @@ not roll it back.
 
 ## Remove the optional integration
 
-These commands remove the checker and hook while preserving phone authentication:
+This command removes the hook while preserving phone authentication:
 
 ```sh
 sudo rm /etc/pacman.d/hooks/95-syauth-check.hook
-sudo rm /usr/local/libexec/syauth-update-check
 ```
 
 Keep the baseline for reference, or remove it explicitly:

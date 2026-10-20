@@ -35,6 +35,17 @@ class PackageTests(unittest.TestCase):
                     self.assertNotIn("preremove", config["scripts"])
                     self.assertNotIn("postremove", config["scripts"])
 
+    def test_every_format_ships_the_installer_and_its_helpers(self):
+        expected = {"/usr/lib/syauth/install.sh": 0o755, "/usr/lib/syauth/install-kde-status": 0o755,
+                    "/usr/lib/syauth/check-pam-update": 0o755, "/usr/share/syauth/kde/PhoneStatus.qml": 0o644,
+                    "/usr/share/syauth/pacman/95-syauth-check.hook": 0o644}
+        for kind in ("deb", "rpm", "archlinux"):
+            with self.subTest(kind=kind):
+                contents = {item["dst"]: item for item in self.packages.package_config("1.2.3", "x86_64", kind, REPO / "target/release")["contents"]}
+                for destination, mode in expected.items():
+                    self.assertEqual(contents[destination]["file_info"]["mode"], mode)
+                    self.assertTrue(Path(contents[destination]["src"]).is_file())
+
     def test_artifact_names_match_native_conventions(self):
         for arch, debarch in (("x86_64", "amd64"), ("aarch64", "arm64")):
             self.assertEqual(self.packages.artifact_name("1.2.3", arch, "deb"), f"syauth_1.2.3_{debarch}.deb")

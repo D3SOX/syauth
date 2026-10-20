@@ -308,16 +308,17 @@ The optional Arch hook checks the setup after updates to `kscreenlocker`,
 changes PAM configuration files, the custom PAM module, or its GCC/audit/cap-ng
 libraries. It runs once after a matching transaction completes.
 
-Install it from the repository root after testing sudo, phone unlock, password
-unlock, and password retry after a phone timeout:
+Install it after testing sudo, phone unlock, password unlock, and password
+retry after a phone timeout:
 
 ```sh
-sudo bash deploy/arch/install-update-check.sh
+sh /usr/lib/syauth/install.sh update-check
 ```
 
-The installer adds these files and preserves the PAM setup:
+The syauth package ships the checker. The command records the baseline, runs a
+first check, and only then enables the hook. It preserves the PAM setup:
 
-- `/usr/local/libexec/syauth-update-check`, a Python checker using the standard library.
+- `/usr/lib/syauth/check-pam-update`, a Python checker using the standard library, from the syauth package.
 - `/etc/pacman.d/hooks/95-syauth-check.hook`, the pacman hook.
 - `/var/lib/syauth-update-check/baseline.json`, hashes and package versions from the tested setup.
 
@@ -335,7 +336,7 @@ resolve. It does not prove that KDE's current unlock behavior works.
 Run the checker at any time as your desktop user:
 
 ```sh
-/usr/local/libexec/syauth-update-check
+/usr/lib/syauth/check-pam-update
 ```
 
 If it reports a change, review the affected files. Compare changed packaged PAM
@@ -344,24 +345,23 @@ defaults with your local overrides and merge required changes. Resolve relevant
 record the reviewed setup:
 
 ```sh
-sudo /usr/local/libexec/syauth-update-check --record-baseline
+sudo /usr/lib/syauth/check-pam-update --record-baseline
 ```
 
 The hook never records a new baseline. Findings remain visible on later checks
 until you resolve them and record the reviewed setup. Recording refuses missing
 watched packages, unresolved `.pacnew` files, or a module with loader problems.
-The installer also refuses an existing checker, hook, or baseline directory so
-rerunning it cannot silently replace a previous baseline.
+The installer also refuses an existing hook or baseline directory so rerunning
+it cannot silently replace a previous baseline.
 
 The checker exits with `0` for a passing check, `1` when review is needed, or `2`
 when it cannot complete. A failing post-transaction hook reports its findings
 after the package update has finished. It does not roll back the transaction.
 
-To remove the hook and checker while keeping phone authentication:
+To remove the hook while keeping phone authentication:
 
 ```sh
 sudo rm /etc/pacman.d/hooks/95-syauth-check.hook
-sudo rm /usr/local/libexec/syauth-update-check
 ```
 
 The baseline remains available for reference. To delete it too:

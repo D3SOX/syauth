@@ -46,6 +46,10 @@ for distro in $distros; do
         test -f "$PAM_MODULE"
         test "$(stat -c %a "$PAM_MODULE")" = 644
         grep -Fx ExecStart=/usr/libexec/syauth-presenced /usr/lib/systemd/user/syauth-presenced.service
+        sh /usr/lib/syauth/install.sh --help | grep -- --desktop
+        test -x /usr/lib/syauth/install-kde-status
+        test -x /usr/lib/syauth/check-pam-update
+        test -f /usr/share/syauth/kde/PhoneStatus.qml
         for binary in /usr/bin/syauth /usr/libexec/syauth-presenced "$PAM_MODULE"; do
             ldd "$binary" > /tmp/loader
             cat /tmp/loader

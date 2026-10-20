@@ -15,7 +15,14 @@ MARKER = "// syauth live phone status"
 ANCHOR = "    component FailableLabel"
 
 
-def install(shell, source, cli, state, socket=None):
+def default_component():
+    """Use the checkout's component, or the copy the syauth package ships."""
+    checkout = Path(__file__).resolve().parents[1] / "deploy/kde/PhoneStatus.qml"
+    return checkout if checkout.is_file() else Path("/usr/share/syauth/kde/PhoneStatus.qml")
+
+
+def install(shell, source, cli, state, socket=None, qml=None):
+    qml = qml or default_component()
     backup = state / "package"
     manifest = state / "install.json"
     if manifest.exists():
@@ -59,7 +66,7 @@ def install(shell, source, cli, state, socket=None):
         (target / "MainBlock.qml").write_text(original.replace(ANCHOR, component + ANCHOR))
         condition = "if (lockScreenUi.showPrompt && !mainBlock.syauthStatus.isSelectorPrompt(authenticator.promptForSecret)) {"
         (target / "LockScreenUi.qml").write_text(ui.replace(prompt, condition))
-        shutil.copyfile(Path(__file__).resolve().parents[1] / "deploy/kde/PhoneStatus.qml", target / "PhoneStatus.qml")
+        shutil.copyfile(qml, target / "PhoneStatus.qml")
         previous = Path(temporary) / "previous"
         if shell.exists():
             shell.rename(previous)
@@ -88,7 +95,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shell-dir", type=Path)
     parser.add_argument("--source", type=Path, default=Path("/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen"))
-    parser.add_argument("--cli", type=Path, default=Path(shutil.which("syauth") or "/usr/local/bin/syauth"))
+    parser.add_argument("--cli", type=Path, default=Path(shutil.which("syauth") or "/usr/bin/syauth"))
+    parser.add_argument("--component", type=Path, default=default_component(), help="PhoneStatus.qml to install")
     parser.add_argument("--socket", type=Path)
     parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "syauth/kde-status")
     parser.add_argument("--uninstall", action="store_true")
@@ -106,7 +114,7 @@ def main():
         shell = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "plasma/shells" / package
         if package != "org.kde.plasma.desktop" and args.source == parser.get_default("source"):
             args.source = Path("/usr/share/plasma/shells") / package / "contents/lockscreen"
-    install(shell.resolve(), args.source.resolve(), args.cli.resolve(), args.state_dir.resolve(), args.socket)
+    install(shell.resolve(), args.source.resolve(), args.cli.resolve(), args.state_dir.resolve(), args.socket, args.component.resolve())
 
 
 if __name__ == "__main__":

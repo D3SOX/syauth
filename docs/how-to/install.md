@@ -56,31 +56,20 @@ Packages install `/usr/bin/syauth`, `/usr/libexec/syauth-presenced`, the distrib
 
 ## Build the desktop from source
 
-Source builds additionally require a Rust toolchain compatible with `Cargo.lock`, a C toolchain, `pkg-config`, and development packages for D-Bus, PAM, and Bluetooth (`libdbus-1-dev`, `libpam0g-dev`, and `libbluetooth-dev` on Debian).
+Source builds additionally require a Rust toolchain compatible with `Cargo.lock`, a C toolchain, `pkg-config`, Python 3, and development packages for D-Bus, PAM, and Bluetooth (`libdbus-1-dev`, `libpam0g-dev`, and `libbluetooth-dev` on Debian).
 
-From a checkout of syauth:
-
-```sh
-cargo build --locked --release \
-  -p syauth-cli -p syauth-pam -p syauth-presenced
-```
-
-The build produces `target/release/syauth`, `target/release/syauth-presenced`, and `target/release/libpam_syauth.so`.
-
-Install the binaries:
+From a checkout of syauth, the installer builds the binaries, packages them with the same packager as the releases, and installs that package with your package manager:
 
 ```sh
-sudo install -D -m 755 target/release/syauth /usr/local/bin/syauth
-sudo install -D -m 755 target/release/syauth-presenced \
-  /usr/local/libexec/syauth-presenced
+sh scripts/install.sh --source --dry-run
+sh scripts/install.sh --source
 ```
 
-Install the PAM library in your distribution's PAM module directory, with the name `pam_syauth.so`. Find that directory from existing modules; common locations are `/usr/lib/security`, `/usr/lib64/security`, and `/usr/lib/x86_64-linux-gnu/security`. For example, on a host using `/usr/lib64/security`:
+The result has the same layout as a release package, so upgrades and removal go through the package manager. `--source DIR` builds a checkout elsewhere.
 
-```sh
-sudo install -m 644 target/release/libpam_syauth.so \
-  /usr/lib64/security/pam_syauth.so
-```
+## Arch Linux and KDE Plasma setup
+
+On Arch Linux with Plasma 6.8 or newer, add `--desktop` to either mode. The installer then also configures sudo and KDE screen unlock, live lockscreen status, the storage directories, and the user daemon, with backups and a `rollback` command. `--android SERIAL` installs the phone app over ADB: the signed release APK, or with `--source` a debug build. See [install on Arch Linux](../getting-started.md#install-with-the-script).
 
 ## Prepare storage and the user service
 
@@ -99,17 +88,6 @@ For a package installation, the user unit is already installed. Reload and activ
 systemctl --user daemon-reload
 systemctl --user enable --now syauth-presenced.service
 ```
-
-For a source installation under `/usr/local`, write a user unit using the installed binary first:
-
-```sh
-syauth install-presenced --dry-run \
-  --from /usr/local/libexec/syauth-presenced
-systemctl --user daemon-reload
-systemctl --user enable --now syauth-presenced.service
-```
-
-The `--dry-run` command **writes the unit file** but skips the binary copy and `systemctl` calls. This sequence performs the privileged binary installation separately and places the unit in your own user session. There is no `--live` flag. See [configuration](../reference/configuration.md#service-installation) for the installer's other behavior.
 
 ## Install the Android app
 

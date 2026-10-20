@@ -215,7 +215,7 @@ def main(argv=None):
             for finding in findings:
                 print(f"- {finding}", file=sys.stderr)
             print(
-                "After review and successful unlock tests, run: sudo /usr/local/libexec/syauth-update-check --record-baseline",
+                "After review and successful unlock tests, run: sudo /usr/lib/syauth/check-pam-update --record-baseline",
                 file=sys.stderr,
             )
             return 1

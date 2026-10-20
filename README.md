@@ -16,7 +16,7 @@ On a supported Linux desktop:
 curl -fsSL https://d3sox.me/syauth/install.sh | sh
 ```
 
-The installer resolves the latest release, chooses the native package for your distribution and CPU, checks it against GitHub's SHA-256 digest for that asset, and installs it with `apt`, `dnf`, `zypper`, or `pacman`. It requests `sudo` when needed. It leaves PAM configuration and service activation to you.
+The installer resolves the latest release, chooses the native package for your distribution and CPU, checks it against GitHub's SHA-256 digest for that asset, and installs it with `apt`, `dnf`, `zypper`, or `pacman`. It requests `sudo` when needed. Without `--desktop`, it leaves PAM configuration and service activation to you.
 
 Prefer to review the script first?
 
@@ -46,16 +46,16 @@ syauth doctor
 
 Being nearby prepares the connection; each authentication still needs explicit approval and a strong biometric. Keep the existing recovery method available while configuring PAM. The [security guide](https://d3sox.me/syauth/explanation/security/) describes the current implementation's differences from the design specification, including bond derivation and desktop key storage.
 
-## Arch Linux and KDE Plasma from source
+## Arch Linux and KDE Plasma
 
-On Arch Linux with Plasma 6.8 or newer, the source installer sets up the desktop integration from your normal user session:
+On Arch Linux with Plasma 6.8 or newer, `--desktop` also sets up sudo and KDE screen unlock from your normal user session:
 
 ```sh
-python3 scripts/install.py --dry-run
-python3 scripts/install.py
+sh install-syauth.sh --desktop --dry-run
+sh install-syauth.sh --desktop
 ```
 
-It builds the desktop binaries, uses `sudo` for system files, and sets up masked sudo password input and live phone status on the lockscreen. It keeps backups and supports rollback. Add `--android PHONE_SERIAL` to also build and update the Android app over ADB. See [scripted installation](docs/getting-started.md#install-with-the-script) for prerequisites, pairing, phone-only reconnect settings, and rollback commands, and [sudo and KDE screen unlock](docs/pam.md) for the PAM configuration.
+It uses `sudo` for the package and system files, and sets up masked sudo password input and live phone status on the lockscreen. It keeps backups and supports rollback. Add `--android PHONE_SERIAL` to also install the Android app over ADB. See [scripted installation](docs/getting-started.md#install-with-the-script) for prerequisites, pairing, phone-only reconnect settings, and rollback commands, and [sudo and KDE screen unlock](docs/pam.md) for the PAM configuration.
 
 KDE can request the phone when you press Enter with an empty password field, using the optional `on_empty_password` PAM argument. Typing a password uses normal password authentication. For sudo, `terminal_prompt` accepts a password while phone approval waits; add `pwfeedback` to display asterisks.
 
@@ -68,6 +68,15 @@ On restart the daemon can disconnect and reconnect one explicitly configured pho
 - [CLI](https://d3sox.me/syauth/reference/cli/), [configuration](https://d3sox.me/syauth/reference/configuration/), [protocol](https://d3sox.me/syauth/reference/protocol/)
 - [Illustrated mechanics](https://d3sox.me/syauth/explanation/mechanics/) with animated pairing, discovery, and unlock
 - [Release builds and signing](https://d3sox.me/syauth/contributing/releases/)
+
+## Build from source
+
+From a checkout, `--source` builds the desktop binaries, packages them with the release packager, and installs that package. It combines with `--desktop` and `--android`:
+
+```sh
+sh scripts/install.sh --source --dry-run
+sh scripts/install.sh --source
+```
 
 ## Development and contributing
 
