@@ -26,6 +26,11 @@ See [Bluetooth transport and connection recovery](bluetooth.md).
 - The fingerprint prompt opens automatically when a request arrives. Dismissing it returns to Authorize/Disallow.
 - Pending approvals stay reachable from Recents.
 - Tapping Done after pairing activates the bond and starts the connection service without restarting the app.
+- A failed Bluetooth bond shows Android's reason and a **Try again** button instead of waiting forever.
+- With Location off, **Pair with computer** explains that Android's device picker needs Location before opening it. See [the device picker stays empty](how-to/troubleshoot.md#the-device-picker-stays-empty).
+- Each pairing attempt removes the app's older companion-device associations for the same computer, so presence events reach the association in use.
+- The home screen warns when the pairing's Keystore key is gone, for example after restoring the app's data from a backup, and asks for a new pairing.
+- The home screen warns while Android applies battery optimization to the app and offers to turn it off.
 
 See [Android companion setup](android-setup.md).
 
