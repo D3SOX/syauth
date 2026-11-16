@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -40,6 +41,9 @@ import androidx.compose.ui.unit.dp
  */
 object PairingTestTags {
     const val IDLE_CTA: String = "pair.idle.cta"
+    const val LOCATION_OFF_TEXT: String = "pair.location.text"
+    const val LOCATION_OFF_SETTINGS: String = "pair.location.settings"
+    const val LOCATION_OFF_CONTINUE: String = "pair.location.continue"
     const val SCANNING_PROGRESS: String = "pair.scanning.progress"
     const val SCANNING_CANCEL: String = "pair.scanning.cancel"
     const val LESC_CODE: String = "pair.lesc.code"
@@ -51,12 +55,18 @@ object PairingTestTags {
     const val BONDED_DONE: String = "pair.bonded.done"
     const val FAILED_REASON: String = "pair.failed.reason"
     const val FAILED_BACK: String = "pair.failed.back"
+    const val FAILED_RETRY: String = "pair.failed.retry"
 }
 
 /** Static UI strings. Centralised so tests assert on the same constants. */
 object PairingStrings {
     const val IDLE_CTA: String = "Pair with computer"
     const val CANCEL: String = "Cancel"
+    const val LOCATION_OFF_TEXT: String =
+        "Turn on Location to pair. Android only finds the computer while Location is on. " +
+            "You can turn it off again after pairing; unlocking works without it."
+    const val LOCATION_OFF_SETTINGS: String = "Open Location settings"
+    const val LOCATION_OFF_CONTINUE: String = "Continue"
     const val OOB_QUESTION: String = "These match the computer?"
     const val OOB_YES: String = "Yes"
     const val OOB_NO: String = "No"
@@ -64,6 +74,7 @@ object PairingStrings {
     const val DONE: String = "Done"
     const val FAILED_PREFIX: String = "Pairing failed: "
     const val BACK: String = "Back"
+    const val RETRY: String = "Try again"
 }
 
 /**
@@ -75,6 +86,9 @@ object PairingStrings {
  * @param onOobYes invoked from OobConfirming.
  * @param onOobNo invoked from OobConfirming.
  * @param onDone invoked from Bonded / Failed — pops the route back to home.
+ * @param onRetry invoked from Failed — starts a fresh pair attempt.
+ * @param onOpenLocationSettings invoked from LocationOff.
+ * @param onContinueWithoutLocation invoked from LocationOff.
  */
 @Composable
 fun PairingScreen(
@@ -84,6 +98,9 @@ fun PairingScreen(
     onOobYes: () -> Unit,
     onOobNo: () -> Unit,
     onDone: () -> Unit,
+    onRetry: () -> Unit = {},
+    onOpenLocationSettings: () -> Unit = {},
+    onContinueWithoutLocation: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -94,6 +111,10 @@ fun PairingScreen(
     ) {
         when (state) {
             is PairingState.Idle -> IdleContent(onStartScan = onStartScan)
+            is PairingState.LocationOff -> LocationOffContent(
+                onOpenSettings = onOpenLocationSettings,
+                onContinue = onContinueWithoutLocation,
+            )
             is PairingState.Scanning -> ScanningContent(onCancel = onCancel)
             is PairingState.LescNegotiating -> LescContent(
                 code = state.code,
@@ -105,7 +126,7 @@ fun PairingScreen(
                 onNo = onOobNo,
             )
             is PairingState.Bonded -> BondedContent(name = state.name, onDone = onDone)
-            is PairingState.Failed -> FailedContent(reason = state.reason, onBack = onDone)
+            is PairingState.Failed -> FailedContent(reason = state.reason, onBack = onDone, onRetry = onRetry)
         }
     }
 }
@@ -119,6 +140,29 @@ private fun IdleContent(onStartScan: () -> Unit) {
             .semantics { testTag = PairingTestTags.IDLE_CTA },
     ) {
         Text(text = PairingStrings.IDLE_CTA)
+    }
+}
+
+@Composable
+private fun LocationOffContent(onOpenSettings: () -> Unit, onContinue: () -> Unit) {
+    Text(
+        text = PairingStrings.LOCATION_OFF_TEXT,
+        modifier = Modifier.semantics { testTag = PairingTestTags.LOCATION_OFF_TEXT },
+    )
+    Spacer(modifier = Modifier.height(24.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedButton(
+            onClick = onContinue,
+            modifier = Modifier.semantics { testTag = PairingTestTags.LOCATION_OFF_CONTINUE },
+        ) {
+            Text(text = PairingStrings.LOCATION_OFF_CONTINUE)
+        }
+        Button(
+            onClick = onOpenSettings,
+            modifier = Modifier.semantics { testTag = PairingTestTags.LOCATION_OFF_SETTINGS },
+        ) {
+            Text(text = PairingStrings.LOCATION_OFF_SETTINGS)
+        }
     }
 }
 
@@ -198,16 +242,24 @@ private fun BondedContent(name: String, onDone: () -> Unit) {
 }
 
 @Composable
-private fun FailedContent(reason: String, onBack: () -> Unit) {
+private fun FailedContent(reason: String, onBack: () -> Unit, onRetry: () -> Unit) {
     Text(
         text = PairingStrings.FAILED_PREFIX + reason,
         modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_REASON },
     )
     Spacer(modifier = Modifier.height(24.dp))
-    Button(
-        onClick = onBack,
-        modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_BACK },
-    ) {
-        Text(text = PairingStrings.BACK)
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_BACK },
+        ) {
+            Text(text = PairingStrings.BACK)
+        }
+        Button(
+            onClick = onRetry,
+            modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_RETRY },
+        ) {
+            Text(text = PairingStrings.RETRY)
+        }
     }
 }

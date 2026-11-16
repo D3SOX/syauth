@@ -14,7 +14,7 @@ You need the [installed daemon and companion app](install.md), Bluetooth enabled
 
     This uses BlueZ's default adapter. To choose one of several controllers, pass its name, for example `--adapter hci1`.
 
-2. On Android, choose **Pair with computer** and select the intended desktop in the system device picker.
+2. On Android, turn on Location, choose **Pair with computer**, and select the intended desktop in the system device picker. The picker finds nothing while Location is off, so the app asks you to turn it on first. You can turn Location off again after pairing. Unlocking works without it.
 3. Compare the **six-digit Bluetooth code** on both devices. Confirm on both. In terminal mode, type `y` and press Enter at the desktop prompt. If the codes differ, cancel.
 4. Compare the **four-word application code** displayed by syauth on both devices. This is a separate confirmation. Accept it only if it matches.
 5. Finish the companion-device and background setup prompts, then return to the home screen.

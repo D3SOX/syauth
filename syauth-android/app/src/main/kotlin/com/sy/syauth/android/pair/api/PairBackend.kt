@@ -116,4 +116,11 @@ interface PairBackend {
      * observes the system bond state; tests resolve this synchronously.
      */
     fun awaitLescResult(): LescResult
+
+    /**
+     * Release platform resources (broadcast receivers). The ViewModel
+     * calls this from `onCleared()`, so every pair attempt tears down
+     * its receivers before the next attempt registers new ones.
+     */
+    fun cleanup() = Unit
 }

@@ -241,9 +241,10 @@ systemctl --user stop syauth-presenced
 syauth pair --timeout-secs 300
 ```
 
-1. On the phone, select Pair / Pair with computer and choose syauth
-   in Android's device picker (it may use this advertisement name rather than
-   your laptop hostname).
+1. On the phone, turn on Location, select Pair / Pair with computer, and choose
+   syauth in Android's device picker (it may use this advertisement name rather
+   than your laptop hostname). The picker stays empty while Location is off.
+   You can turn Location off again after pairing.
 2. Compare the six-digit Bluetooth code on both devices and approve only a match.
    Contact/call-history sharing is unnecessary. Media audio and Phone calls can
    stay disabled; authentication uses BLE. See the

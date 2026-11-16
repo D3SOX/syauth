@@ -63,6 +63,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -157,6 +158,10 @@ public const val STRONG_AUTHENTICATOR: Int =
  * Android Keystore (`AndroidKeyStore` since API 33) both resolve.
  */
 internal const val ED25519_ALGORITHM: String = "Ed25519"
+
+/** Shown when an approval cannot sign because the bond's Keystore key is gone. */
+internal const val SIGNING_KEY_MISSING_TOAST: String =
+    "syauth can't sign: this phone's key for the pairing is gone. Open syauth and re-pair."
 
 /** Android Keystore provider name. */
 internal const val KEYSTORE_PROVIDER: String = "AndroidKeyStore"
@@ -596,6 +601,8 @@ internal class AndroidBiometricGate(
     ) {
         val privateKey = openPrivateKey(keystoreAlias)
         if (privateKey == null) {
+            Log.w(APPROVAL_LOG_TAG, "no signing key for peer=$peerId alias=$keystoreAlias; re-pair needed")
+            Toast.makeText(activity, SIGNING_KEY_MISSING_TOAST, Toast.LENGTH_LONG).show()
             callback.onFailed("no PrivateKey under alias '$keystoreAlias'")
             return
         }
@@ -619,6 +626,7 @@ internal class AndroidBiometricGate(
                 runCatching {
                     KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }.deleteEntry(keystoreAlias)
                 }
+                Toast.makeText(activity, SIGNING_KEY_MISSING_TOAST, Toast.LENGTH_LONG).show()
                 callback.onFailed("key invalidated; please re-pair on the desktop")
             } else {
                 Log.w(APPROVAL_LOG_TAG, "initSign failed peer=$peerId", err)

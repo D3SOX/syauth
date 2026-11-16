@@ -75,6 +75,8 @@ import com.sy.syauth.android.approve.ApproveViewModel
 import com.sy.syauth.android.approve.KeystoreFrameSigner
 import com.sy.syauth.android.approve.UniffiWireSigner
 import com.sy.syauth.android.bg.APPROVE_EXTRA_CHALLENGE_B64
+import com.sy.syauth.android.bg.batteryOptimizationDeepLinkIntent
+import com.sy.syauth.android.bg.isIgnoringBatteryOptimizations
 import com.sy.syauth.android.bg.APPROVE_EXTRA_HOSTNAME
 import com.sy.syauth.android.bg.APPROVE_EXTRA_PEER_ID
 import com.sy.syauth.android.bg.B64_FLAGS
@@ -106,6 +108,7 @@ import com.sy.syauth.android.history.ChallengeHistoryRecord
 import com.sy.syauth.android.history.HISTORY_DISPLAY_LIMIT
 import com.sy.syauth.android.bond.BondRecord
 import com.sy.syauth.android.bond.BOND_RECORD_FILE_NAME
+import com.sy.syauth.android.bond.isSigningKeyUsable
 import com.sy.syauth.android.bond.BondStore
 import com.sy.syauth.android.bond.DiskBondPersister
 import com.sy.syauth.android.bond.loadPersistedBond
@@ -137,6 +140,23 @@ const val HOME_REVOKE_BUTTON_TAG: String = "syauth.home.revoke"
 
 /** Test tag attached to the "?" diagnostic button on the home route. */
 const val HOME_DIAGNOSTIC_BUTTON_TAG: String = "syauth.home.diagnostic"
+
+/** Test tag on the home card's battery-optimization button. */
+const val HOME_ALLOW_BACKGROUND_TAG: String = "syauth.home.allowBackground"
+
+/** Shown on the home card while Android applies battery optimization to syauth. */
+internal const val BATTERY_OPTIMIZED_TEXT: String =
+    "Battery optimization is on for syauth, so Android can stop it in the background " +
+        "and unlock requests time out."
+
+/** Test tag on the home card's "signing key lost, re-pair" warning. */
+const val HOME_KEY_LOST_TAG: String = "syauth.home.keyLost"
+
+/** Shown on the home card when the bond's Keystore key is missing or invalidated. */
+internal const val SIGNING_KEY_LOST_TEXT: String =
+    "This phone's signing key for this pairing is gone, for example after restoring app data " +
+        "from a backup or changing biometrics. Unlocks fail until you pair again: tap Re-pair, " +
+        "then revoke the old bond on the computer with syauth revoke."
 
 // Bond store filename comes from `BondStore.BOND_RECORD_FILE_NAME` so this
 // route never duplicates the literal.
@@ -276,6 +296,13 @@ class MainActivity : FragmentActivity() {
     internal val bondRecord = mutableStateOf<BondRecord?>(null)
 
     /**
+     * True while Android applies battery optimization to syauth. Clearing
+     * app data drops the exemption; refreshed in `onResume` so the home
+     * card updates after the user answers the system dialog.
+     */
+    internal val batteryOptimized = mutableStateOf(false)
+
+    /**
      * Runtime permission gate for the post-bond GATT client path.
      * After the DEV-001 CDM pivot the OS picker
      * (`CompanionDeviceManager.associate`) runs the BLE scan under
@@ -336,20 +363,19 @@ class MainActivity : FragmentActivity() {
      * publishes the seams.
      */
     /**
-     * On cold start, iterate every CDM association this package owns
-     * and start `CompanionDeviceManager.startObservingDevicePresence`
-     * for the ones matching the bonded peer. The OS treats the
-     * call as idempotent; we err on the side of starting all matching
-     * associations (the device has many stale rows from pair retries
-     * — each one ends with the SAME MAC, so observing any of them
-     * lets the OS bind `SyauthCompanionService` on proximity).
+     * On cold start, keep the newest CDM association matching the
+     * bonded peer, remove older ones left behind by earlier pair
+     * attempts, and start `CompanionDeviceManager.startObservingDevicePresence`
+     * for it. The MAC-string observe fallback attaches to the first
+     * association with that address, so stale rows would otherwise
+     * receive the presence events.
      *
      * Without this, `mNotifyOnDeviceNearby` stays `false` on every
      * association and the unlock service never gets bound, which
      * gives `pam_syauth` a `response-timeout` on every unlock.
      */
     private fun startObservingForBondedAssociations(record: BondRecord) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val manager = getSystemService(android.companion.CompanionDeviceManager::class.java) ?: return
         val scanner = cdmPairScanner ?: return
         val targetMac = record.peerId.uppercase()
@@ -358,13 +384,13 @@ class MainActivity : FragmentActivity() {
                 info.deviceMacAddress?.toString()?.uppercase() == targetMac
             }
         }.getOrDefault(emptyList())
-        if (matched.isEmpty()) {
+        val newest = matched.maxByOrNull { it.id }
+        if (newest == null) {
             Log.w(PERMISSION_LOG_TAG, "no CDM associations match bonded mac=$targetMac")
             return
         }
-        for (info in matched) {
-            scanner.startObservingDevicePresence(info.id)
-        }
+        scanner.keepOnlyAssociation(newest.id)
+        scanner.startObservingDevicePresence(newest.id)
     }
 
     private fun installCompanionSeams(record: BondRecord) {
@@ -544,6 +570,7 @@ class MainActivity : FragmentActivity() {
                         activity = this,
                         approvePayload = approvePayload.value,
                         bondRecord = bondRecord.value,
+                        batteryOptimized = batteryOptimized.value,
                         cdmPairScanner = cdmPairScanner,
                         onRevoke = ::onBondRevokeTapped,
                         onPairingFinished = ::onPairingFinished,
@@ -567,6 +594,11 @@ class MainActivity : FragmentActivity() {
         startObservingForBondedAssociations(record)
         startSyauthCompanionForegroundService()
         scheduleSyauthWatchdog()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        batteryOptimized.value = !isIgnoringBatteryOptimizations(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -618,6 +650,7 @@ private fun SyauthApp(
     activity: FragmentActivity,
     approvePayload: ApprovePayload?,
     bondRecord: BondRecord?,
+    batteryOptimized: Boolean,
     cdmPairScanner: AndroidCdmPairCompanionScanner?,
     onRevoke: () -> Unit,
     onPairingFinished: (PairingState) -> Unit,
@@ -639,9 +672,20 @@ private fun SyauthApp(
                     }.getOrDefault(0L)
                 }
             }
+            // A restored backup or a biometric re-enrollment can leave the
+            // bond file without its Keystore key; every unlock then fails.
+            val signingKeyLost = remember(bondRecord) {
+                bondRecord != null && !isSigningKeyUsable(bondRecord.keystoreAlias)
+            }
             HomeRoute(
                 bondRecord = bondRecord,
                 pairedAtMillis = pairedAtMillis,
+                signingKeyLost = signingKeyLost,
+                batteryOptimized = batteryOptimized,
+                onAllowBackgroundTapped = {
+                    runCatching { activity.startActivity(batteryOptimizationDeepLinkIntent(activity)) }
+                        .onFailure { Log.w(PERMISSION_LOG_TAG, "battery-optimization request failed", it) }
+                },
                 onPairTapped = { navController.navigate(NavRoutes.PAIR) },
                 onRevokeTapped = onRevoke,
                 onDiagnosticTapped = { navController.navigate(NavRoutes.DIAGNOSTIC) },
@@ -672,6 +716,20 @@ private fun SyauthApp(
                 onDone = {
                     onPairingFinished(state)
                     navController.popBackStack(NavRoutes.HOME, inclusive = false)
+                },
+                // Replace this back-stack entry so the old ViewModel is
+                // cleared (unregistering its receivers) and the retry
+                // gets a fresh one-shot backend.
+                onOpenLocationSettings = {
+                    activity.startActivity(
+                        Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS),
+                    )
+                },
+                onContinueWithoutLocation = viewModel::onContinueWithoutLocationTapped,
+                onRetry = {
+                    navController.navigate(NavRoutes.PAIR) {
+                        popUpTo(NavRoutes.PAIR) { inclusive = true }
+                    }
                 },
             )
         }
@@ -850,6 +908,9 @@ private val BLUETOOTH_RUNTIME_PERMISSIONS: Array<String> = arrayOf(
 private fun HomeRoute(
     bondRecord: BondRecord?,
     pairedAtMillis: Long,
+    signingKeyLost: Boolean,
+    batteryOptimized: Boolean,
+    onAllowBackgroundTapped: () -> Unit,
     onPairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
     onDiagnosticTapped: () -> Unit,
@@ -880,6 +941,9 @@ private fun HomeRoute(
                 PairedHomeBody(
                     bondRecord = bondRecord,
                     pairedAtMillis = pairedAtMillis,
+                    signingKeyLost = signingKeyLost,
+                    batteryOptimized = batteryOptimized,
+                    onAllowBackgroundTapped = onAllowBackgroundTapped,
                     onRepairTapped = onPairTapped,
                     onRevokeTapped = { revokeDialogState.value = true },
                 )
@@ -930,6 +994,9 @@ private fun UnpairedHomeBody(onPairTapped: () -> Unit) {
 private fun PairedHomeBody(
     bondRecord: BondRecord,
     pairedAtMillis: Long,
+    signingKeyLost: Boolean,
+    batteryOptimized: Boolean,
+    onAllowBackgroundTapped: () -> Unit,
     onRepairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
 ) {
@@ -939,6 +1006,29 @@ private fun PairedHomeBody(
     Text(text = "peer_id: ${truncatedPeerId(bondRecord.peerId)}")
     if (pairedAtMillis > 0L) {
         Text(text = "paired:  ${formatPairedAt(pairedAtMillis)}")
+    }
+    if (signingKeyLost) {
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = SIGNING_KEY_LOST_TEXT,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.semantics { testTag = HOME_KEY_LOST_TAG },
+        )
+    }
+    if (batteryOptimized) {
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = BATTERY_OPTIMIZED_TEXT,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        androidx.compose.material3.TextButton(
+            onClick = onAllowBackgroundTapped,
+            modifier = Modifier.semantics { testTag = HOME_ALLOW_BACKGROUND_TAG },
+        ) {
+            Text(text = "Allow background use")
+        }
     }
     Spacer(modifier = Modifier.height(24.dp))
     androidx.compose.foundation.layout.Row(
@@ -1087,6 +1177,10 @@ private object PairingViewModelFactoryHolder {
                     ),
                     bondRemover = ReflectionBondRemover(adapter = adapter),
                     companionAssociator = associator,
+                    isLocationEnabled = {
+                        val lm = context.getSystemService(android.location.LocationManager::class.java)
+                        lm == null || androidx.core.location.LocationManagerCompat.isLocationEnabled(lm)
+                    },
                 )
                 // DEV-001 re-march: backend → ViewModel callback edge. The
                 // bond-state receiver inside `backend` resolves a

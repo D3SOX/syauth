@@ -46,6 +46,10 @@ Drop the option, or pass one of the listed names. `ls /sys/class/bluetooth` and 
 
 `no bluetooth adapter found` means BlueZ has no adapter at all. Check that `bluetooth.service` is running and that `rfkill list` shows the controller as unblocked.
 
+## The device picker stays empty
+
+Android's companion-device picker finds the desktop only while Location is on. The scan starts, but returns nothing with Location off. Turn Location on, keep the desktop pairing window open, and tap **Pair with computer** again. The app warns about this before it opens the picker. You can turn Location off after pairing.
+
 ## Pairing fails while reading the host key
 
 If Android reports `host-pubkey read failed status=1`, check that it is running the current companion. The exchange reads the host key **before** sending the phone key; sending the phone key allows the desktop to replace the transient pair service. Reusing those handles afterward can fail. Both pairing and persistent connections explicitly request LE transport; enabling a Bluetooth audio profile is not required.

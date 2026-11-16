@@ -38,6 +38,10 @@ import com.sy.syauth.android.pair.impl.EXTRA_PAIRING_VARIANT_NAME
 import com.sy.syauth.android.pair.impl.KEYSTORE_ALIAS_PREFIX
 import com.sy.syauth.android.pair.impl.KEYSTORE_MINT_FAILED_PREFIX
 import com.sy.syauth.android.pair.impl.KEYSTORE_UNAVAILABLE_REASON
+import com.sy.syauth.android.pair.impl.EXTRA_UNBOND_REASON_NAME
+import com.sy.syauth.android.pair.impl.OS_BOND_FAILED_HINT
+import com.sy.syauth.android.pair.impl.OS_BOND_FAILED_PREFIX
+import com.sy.syauth.android.pair.impl.osBondFailedReason
 import com.sy.syauth.android.pair.impl.KeystoreEd25519KeyMaterial
 import com.sy.syauth.android.pair.impl.KeystoreKeyGenerator
 import com.sy.syauth.android.pair.impl.KeystoreKeygenError
@@ -75,6 +79,7 @@ private const val FIXTURE_PASSKEY: Int = 123_456
 private const val FIXTURE_PEER_ADDR: String = "AA:BB:CC:DD:EE:01"
 private const val FIXTURE_PEER_NAME: String = "test-desktop"
 private const val FIXTURE_CANCEL_REASON: String = "user cancelled the companion-device picker"
+private const val UNBOND_REASON_AUTH_TIMEOUT: Int = 6
 
 /**
  * Deterministic lookup: every 16-byte UUID is `(key xor minute xor i)`
@@ -182,9 +187,10 @@ class RealPairBackendRuntimeTest {
         bondStateRegistrar: RecordingReceiverRegistrar = RecordingReceiverRegistrar(),
         bondKeyDeriver: PairBondKeyDeriver = XorPairBondKeyDeriver(),
         keystoreKeyGenerator: KeystoreKeyGenerator? = null,
+        adapter: android.bluetooth.BluetoothAdapter? = null,
     ): RealPairBackend = RealPairBackend(
         context = ApplicationProvider.getApplicationContext(),
-        adapter = null, // tests don't need a real BluetoothAdapter
+        adapter = adapter,
         companionScanner = companionScanner,
         gattExchange = gattExchange,
         pairingReceiverRegistrar = pairingRegistrar,
@@ -291,7 +297,7 @@ class RealPairBackendRuntimeTest {
         var rejected: Int = -1
         val receiver = PairingBroadcastReceiver(
             onAccept = { accepted = it },
-            onReject = { rejected = it },
+            onReject = { variant, _ -> rejected = variant },
         )
         val intent = Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
             putExtra(EXTRA_PAIRING_VARIANT_NAME, PAIRING_VARIANT_PASSKEY_CONFIRMATION)
@@ -308,7 +314,7 @@ class RealPairBackendRuntimeTest {
         var rejected: Int = -1
         val receiver = PairingBroadcastReceiver(
             onAccept = { accepted = it },
-            onReject = { rejected = it },
+            onReject = { variant, _ -> rejected = variant },
         )
         val intent = Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
             putExtra(EXTRA_PAIRING_VARIANT_NAME, JUST_WORKS_VARIANT)
@@ -347,7 +353,7 @@ class RealPairBackendRuntimeTest {
         var failureReason: String? = null
         val receiver = BondStateBroadcastReceiver(
             onBonded = { bondedAddr = it },
-            onFailed = { failureReason = it },
+            onFailed = { _, reason -> failureReason = reason },
         )
         // Robolectric uses a real BluetoothDevice from the platform's
         // BluetoothManager; we use the BluetoothAdapter shadow to
@@ -373,7 +379,7 @@ class RealPairBackendRuntimeTest {
         var failureReason: String? = null
         val receiver = BondStateBroadcastReceiver(
             onBonded = { bondedAddr = it },
-            onFailed = { failureReason = it },
+            onFailed = { _, reason -> failureReason = reason },
         )
         val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
         val device = adapter?.getRemoteDevice(FIXTURE_PEER_ADDR)
@@ -385,6 +391,122 @@ class RealPairBackendRuntimeTest {
         receiver.onReceive(ApplicationProvider.getApplicationContext(), intent)
         assertNull("no bonded path must fire", bondedAddr)
         assertNotNull("BOND_BONDING -> BOND_NONE must fire onFailed", failureReason)
+    }
+
+    @Test
+    fun failed_os_bond_for_picked_peer_reaches_the_viewmodel_callback() {
+        val bondReg = RecordingReceiverRegistrar()
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = null,
+            bondStateRegistrar = bondReg,
+            adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter(),
+        )
+        val delivered = mutableListOf<LescResult>()
+        backend.setOnLescResultCallback { delivered.add(it) }
+        backend.pickPeer(PeerHandle(id = FIXTURE_PEER_ADDR, name = FIXTURE_PEER_NAME))
+
+        bondReg.registered.single().onReceive(
+            ApplicationProvider.getApplicationContext(),
+            bondNoneIntent(FIXTURE_PEER_ADDR, unbondReason = UNBOND_REASON_AUTH_TIMEOUT),
+        )
+
+        val failed = delivered.single() as LescResult.Failed
+        assertTrue("reason names the failure, got: ${failed.reason}", failed.reason.contains("timed out (reason 6)"))
+        assertTrue("reason tells the user what to check", failed.reason.contains(OS_BOND_FAILED_HINT))
+        backend.cleanup()
+    }
+
+    @Test
+    fun a_later_attempt_still_reaches_the_viewmodel_after_an_earlier_failure() {
+        // Cancel keeps the same ViewModel and backend; a late BOND_NONE
+        // from the cancelled attempt must not swallow the next result.
+        val bondReg = RecordingReceiverRegistrar()
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = CannedHostPubkeyExchange(),
+            bondStateRegistrar = bondReg,
+            keystoreKeyGenerator = FixedKeystoreKeyGenerator(),
+            adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter(),
+        )
+        val delivered = mutableListOf<LescResult>()
+        backend.setOnLescResultCallback { delivered.add(it) }
+        backend.pickPeer(PeerHandle(id = FIXTURE_PEER_ADDR, name = FIXTURE_PEER_NAME))
+        bondReg.registered.single().onReceive(
+            ApplicationProvider.getApplicationContext(),
+            bondNoneIntent(FIXTURE_PEER_ADDR, unbondReason = UNBOND_REASON_AUTH_TIMEOUT),
+        )
+
+        backend.runPostBondExchange(FIXTURE_PEER_ADDR)
+
+        assertTrue("second attempt must reach the ViewModel, got $delivered", delivered.last() is LescResult.Bonded)
+        backend.cleanup()
+    }
+
+    @Test
+    fun rejected_pairing_request_fails_only_the_picked_peer() {
+        val pairingReg = RecordingReceiverRegistrar()
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = null,
+            pairingRegistrar = pairingReg,
+            adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter(),
+        )
+        val delivered = mutableListOf<LescResult>()
+        backend.setOnLescResultCallback { delivered.add(it) }
+        backend.pickPeer(PeerHandle(id = FIXTURE_PEER_ADDR, name = FIXTURE_PEER_NAME))
+        val receiver = pairingReg.registered.single()
+
+        receiver.onReceive(ApplicationProvider.getApplicationContext(), justWorksRequest("AA:BB:CC:DD:EE:99"))
+        assertTrue("another device's pairing request must not fail this attempt", delivered.isEmpty())
+
+        receiver.onReceive(ApplicationProvider.getApplicationContext(), justWorksRequest(FIXTURE_PEER_ADDR))
+        assertTrue("got $delivered", delivered.single() is LescResult.Failed)
+        backend.cleanup()
+    }
+
+    private fun justWorksRequest(address: String): Intent =
+        Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
+            putExtra(EXTRA_PAIRING_VARIANT_NAME, JUST_WORKS_VARIANT)
+            putExtra(BluetoothDevice.EXTRA_DEVICE, android.bluetooth.BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address))
+        }
+
+    @Test
+    fun failed_os_bond_for_another_device_is_ignored() {
+        val bondReg = RecordingReceiverRegistrar()
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = null,
+            bondStateRegistrar = bondReg,
+            adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter(),
+        )
+        val delivered = mutableListOf<LescResult>()
+        backend.setOnLescResultCallback { delivered.add(it) }
+        backend.pickPeer(PeerHandle(id = FIXTURE_PEER_ADDR, name = FIXTURE_PEER_NAME))
+
+        bondReg.registered.single().onReceive(
+            ApplicationProvider.getApplicationContext(),
+            bondNoneIntent("AA:BB:CC:DD:EE:99", unbondReason = UNBOND_REASON_AUTH_TIMEOUT),
+        )
+
+        assertTrue("another device's failed bond must not fail this attempt", delivered.isEmpty())
+        backend.cleanup()
+    }
+
+    @Test
+    fun os_bond_failed_reason_handles_unknown_and_missing_codes() {
+        assertTrue(osBondFailedReason(null).startsWith("$OS_BOND_FAILED_PREFIX. "))
+        assertTrue(osBondFailedReason(42).startsWith("$OS_BOND_FAILED_PREFIX (reason 42). "))
+    }
+
+    private fun bondNoneIntent(address: String, unbondReason: Int): Intent {
+        val device = android.bluetooth.BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
+        return Intent(BluetoothDevice.ACTION_BOND_STATE_CHANGED).apply {
+            putExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
+            putExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.BOND_BONDING)
+            putExtra(BluetoothDevice.EXTRA_DEVICE, device)
+            putExtra(EXTRA_UNBOND_REASON_NAME, unbondReason)
+        }
     }
 
     // -------------------------------------------------------------

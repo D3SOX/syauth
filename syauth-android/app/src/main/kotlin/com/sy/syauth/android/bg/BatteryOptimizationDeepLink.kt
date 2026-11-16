@@ -1,12 +1,10 @@
 // Roadmap item S-018 — deep-link to the battery-optimization
 // exclusion settings page.
 //
-// Doze (API 23+) will kill our CompanionDeviceService binding within
-// minutes unless the user has excluded syauth from battery
-// optimization. The home screen of the app pops this intent on
-// first launch (and again after a fresh CDM association) so the
-// user lands on the system settings page with the relevant toggle
-// already in focus.
+// Doze (API 23+) stops the foreground service's BLE connection unless
+// syauth is excluded from battery optimization. Clearing the app's
+// data drops the exclusion, so the home card checks it on every
+// resume and offers this intent when it is missing.
 //
 // `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` is API 23+;
 // we never need to gate this by SDK because our minSdk is 26.

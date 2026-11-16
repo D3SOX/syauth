@@ -51,6 +51,13 @@ sealed class PairingState {
     /** Initial state. The CTA is the only interactive element. */
     data object Idle : PairingState()
 
+    /**
+     * Location is off. Android's companion-device picker scans with
+     * Location services and finds nothing while they are off, so the
+     * screen explains this before opening the picker.
+     */
+    data object LocationOff : PairingState()
+
     /** Scanning is in flight; the user may cancel back to [Idle]. */
     data object Scanning : PairingState()
 

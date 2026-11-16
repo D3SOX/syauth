@@ -89,6 +89,48 @@ public const val LESC_PENDING_PLACEHOLDER: String = "(awaiting OS pairing reques
 /** Surfaced as the [LescResult.Failed] reason when the bond never resolves. */
 public const val LESC_BOND_NEVER_RESOLVED_REASON: String = "OS bond never reached BOND_BONDED"
 
+/** Prefix of the [LescResult.Failed] reason when the OS bond goes `BOND_BONDING -> BOND_NONE`. */
+public const val OS_BOND_FAILED_PREFIX: String = "Bluetooth pairing failed"
+
+/** Appended to [OS_BOND_FAILED_PREFIX] so the user knows what to check before retrying. */
+public const val OS_BOND_FAILED_HINT: String =
+    "Check that syauth pair is running on the computer and confirm the code there, then try again."
+
+/**
+ * Hidden `BluetoothDevice.EXTRA_UNBOND_REASON` extra. The stack puts it on
+ * `ACTION_BOND_STATE_CHANGED` when a bond attempt ends in `BOND_NONE`.
+ */
+internal const val EXTRA_UNBOND_REASON_NAME: String = "android.bluetooth.device.extra.REASON"
+
+/**
+ * Human-readable names for the hidden `BluetoothDevice.UNBOND_REASON_*`
+ * values (AOSP `BluetoothDevice.java`).
+ */
+private val UNBOND_REASON_NAMES: Map<Int, String> = mapOf(
+    1 to "authentication failed",
+    2 to "rejected by the computer",
+    3 to "cancelled",
+    4 to "computer not reachable",
+    5 to "discovery in progress",
+    6 to "timed out",
+    7 to "too many attempts",
+    8 to "cancelled on the computer",
+    9 to "bond removed",
+)
+
+/**
+ * Build the failure reason for a `BOND_BONDING -> BOND_NONE` transition.
+ * [unbondReason] is the hidden `EXTRA_UNBOND_REASON` value, or null when
+ * the stack did not send one.
+ */
+public fun osBondFailedReason(unbondReason: Int?): String {
+    val detail = when (val name = unbondReason?.let { UNBOND_REASON_NAMES[it] }) {
+        null -> unbondReason?.let { " (reason $it)" }.orEmpty()
+        else -> ": $name (reason $unbondReason)"
+    }
+    return "$OS_BOND_FAILED_PREFIX$detail. $OS_BOND_FAILED_HINT"
+}
+
 /** Surfaced when `pickPeer` cannot derive a [BluetoothDevice] from the peer id. */
 public const val PEER_LOOKUP_FAILED_REASON: String = "could not look up BluetoothDevice for the chosen peer"
 
@@ -345,16 +387,18 @@ public class RealPairBackend(
     /** Pairing-request receiver registered at init. */
     private val pairingReceiver: PairingBroadcastReceiver = PairingBroadcastReceiver(
         onAccept = { passkey -> lastPairingCode = passkey.toString().padStart(LESC_CODE_DIGITS, '0') },
-        onReject = { variant ->
-            Log.w(REAL_PAIR_BACKEND_LOG_TAG, "pairing variant rejected variant=$variant")
-            lescResultDeferred.complete(LescResult.Failed("OS pairing variant rejected: $variant"))
+        onReject = { variant, address ->
+            Log.w(REAL_PAIR_BACKEND_LOG_TAG, "pairing variant rejected variant=$variant addr=$address")
+            if (isPickedPeer(address)) {
+                resolve(LescResult.Failed("OS pairing variant rejected: $variant"))
+            }
         },
     )
 
     /** Bond-state receiver registered at init. */
     private val bondStateReceiver: BondStateBroadcastReceiver = BondStateBroadcastReceiver(
         onBonded = ::onBondedFromReceiver,
-        onFailed = { reason -> lescResultDeferred.complete(LescResult.Failed(reason)) },
+        onFailed = ::onBondFailedFromReceiver,
     )
 
     /** True after [cleanup] has run; further public calls become no-ops. */
@@ -505,7 +549,7 @@ public class RealPairBackend(
      * ViewModel from `onCleared()` so the backend does not leak
      * receivers across pair attempts.
      */
-    public fun cleanup() {
+    override fun cleanup() {
         if (cleanedUp) return
         cleanedUp = true
         runCatching { pairingReceiverRegistrar.unregister(pairingReceiver) }
@@ -559,9 +603,43 @@ public class RealPairBackend(
      * BlueZ's idle timeout dropped the link before service discovery
      * resolved.
      */
+    /**
+     * Hand the outcome to the ViewModel. Failures used to complete only
+     * [lescResultDeferred], which production never awaits, so the screen
+     * stayed on [LESC_PENDING_PLACEHOLDER] after a failed OS bond. The
+     * callback fires even when the deferred already holds an earlier
+     * attempt's result (Cancel, then Pair again on the same backend);
+     * the ViewModel ignores results outside `LescNegotiating`.
+     */
+    private fun resolve(result: LescResult) {
+        if (cleanedUp) return
+        lescResultDeferred.complete(result)
+        onLescResultCallback.get().invoke(result)
+    }
+
+    /**
+     * True when [address] is the peer the user picked. Pairing broadcasts
+     * for other devices must not fail this attempt: a failed result makes
+     * the ViewModel remove the picked computer's bond.
+     */
+    private fun isPickedPeer(address: String?): Boolean {
+        val picked = pickedAddress ?: return false
+        return address == null || address.equals(picked, ignoreCase = true)
+    }
+
+    /**
+     * Called by the bond-state receiver on `BOND_BONDING -> BOND_NONE`.
+     * Ignores other devices and transitions before the user picked a peer.
+     */
+    private fun onBondFailedFromReceiver(address: String?, reason: String) {
+        if (!isPickedPeer(address)) return
+        Log.w(REAL_PAIR_BACKEND_LOG_TAG, "OS bond failed addr=$address: $reason")
+        resolve(LescResult.Failed(reason))
+    }
+
     private fun onBondedFromReceiver(address: String) {
         val picked = pickedAddress
-        if (picked != null && picked != address) {
+        if (picked != null && !picked.equals(address, ignoreCase = true)) {
             // Bond resolved for a device we did not pick. Ignore.
             return
         }
@@ -579,7 +657,7 @@ public class RealPairBackend(
         if (cleanedUp || !exchangeStarted.compareAndSet(false, true)) return
         val exchange = gattExchange
         if (exchange == null) {
-            lescResultDeferred.complete(LescResult.Failed(GATT_EXCHANGE_MISSING_REASON))
+            resolve(LescResult.Failed(GATT_EXCHANGE_MISSING_REASON))
             return
         }
         val alias = "$KEYSTORE_ALIAS_PREFIX${address.replace(":", "")}"
@@ -590,29 +668,29 @@ public class RealPairBackend(
                     // device or test seam). Refuse to ship a zero-pubkey;
                     // surface a typed failure to the ViewModel.
                     Log.w(REAL_PAIR_BACKEND_LOG_TAG, KEYSTORE_UNAVAILABLE_REASON)
-                    lescResultDeferred.complete(LescResult.Failed(KEYSTORE_UNAVAILABLE_REASON))
+                    resolve(LescResult.Failed(KEYSTORE_UNAVAILABLE_REASON))
                     return
                 }
         } catch (e: KeystoreKeygenError) {
             val reason = "$KEYSTORE_MINT_FAILED_PREFIX${e.message ?: e::class.java.simpleName}"
             Log.w(REAL_PAIR_BACKEND_LOG_TAG, reason, e)
-            lescResultDeferred.complete(LescResult.Failed(reason))
+            resolve(LescResult.Failed(reason))
             return
         }
         val phonePubkey = material.pubkey
         val hostPubkey = runCatching { exchange.exchangePubkeys(address, phonePubkey) }.getOrElse {
             val reason = "pair-service exchange failed: ${it.message ?: it::class.java.simpleName}"
             Log.w(REAL_PAIR_BACKEND_LOG_TAG, reason, it)
-            lescResultDeferred.complete(LescResult.Failed(reason))
+            resolve(LescResult.Failed(reason))
             return
         }
         if (hostPubkey.size != PAIR_PUBKEY_LEN) {
-            lescResultDeferred.complete(LescResult.Failed("host pubkey wrong length: ${hostPubkey.size}"))
+            resolve(LescResult.Failed("host pubkey wrong length: ${hostPubkey.size}"))
             return
         }
         val bondKey = bondKeyDeriver.derive(hostPubkey, phonePubkey)
         if (bondKey.size != PAIR_BOND_KEY_LEN) {
-            lescResultDeferred.complete(LescResult.Failed("bond_key wrong length: ${bondKey.size}"))
+            resolve(LescResult.Failed("bond_key wrong length: ${bondKey.size}"))
             return
         }
         val result = LescResult.Bonded(
@@ -622,8 +700,7 @@ public class RealPairBackend(
             phonePubkey = phonePubkey,
         )
         Log.i(REAL_PAIR_BACKEND_LOG_TAG, "post-bond exchange complete addr=$address")
-        lescResultDeferred.complete(result)
-        onLescResultCallback.get().invoke(result)
+        resolve(result)
     }
 
     private companion object {
@@ -635,11 +712,12 @@ public class RealPairBackend(
 /**
  * Broadcast receiver listening for `ACTION_BOND_STATE_CHANGED`.
  * On `BOND_BONDED`, invokes [onBonded] with the device address;
- * on `BOND_NONE` after a prior `BOND_BONDING`, invokes [onFailed].
+ * on `BOND_NONE` after a prior `BOND_BONDING`, invokes [onFailed] with the
+ * device address and a reason built from the hidden unbond-reason extra.
  */
 public class BondStateBroadcastReceiver(
     private val onBonded: (String) -> Unit,
-    private val onFailed: (String) -> Unit,
+    private val onFailed: (address: String?, reason: String) -> Unit,
 ) : BroadcastReceiver() {
 
     /** Previous bond state observed for the picked device. */
@@ -660,7 +738,13 @@ public class BondStateBroadcastReceiver(
             }
             BluetoothDevice.BOND_NONE -> {
                 if (prevState == BluetoothDevice.BOND_BONDING) {
-                    onFailed("OS bond cancelled or failed (BOND_BONDING -> BOND_NONE)")
+                    val unbondReason = if (intent.hasExtra(EXTRA_UNBOND_REASON_NAME)) {
+                        intent.getIntExtra(EXTRA_UNBOND_REASON_NAME, 0)
+                    } else {
+                        null
+                    }
+                    Log.i(REAL_PAIR_BACKEND_LOG_TAG, "bond failed: unbondReason=$unbondReason addr=${device?.address}")
+                    onFailed(device?.address, osBondFailedReason(unbondReason))
                 }
             }
             else -> Unit // BOND_BONDING is a transient state we do not surface

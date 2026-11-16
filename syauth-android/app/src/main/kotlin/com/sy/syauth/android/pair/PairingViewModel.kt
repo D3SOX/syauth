@@ -2,7 +2,9 @@
 //
 // The state machine is the canonical SPEC §4.4 pairing workflow:
 //
-//   Idle ──[onStartScanTapped]──▶ Scanning
+//   Idle ──[onStartScanTapped, Location on]──▶ Scanning
+//   Idle ──[onStartScanTapped, Location off]──▶ LocationOff
+//   LocationOff ──[onContinueWithoutLocationTapped]──▶ Scanning
 //   Scanning ──[onPeerPicked, adapter supports LESC]──▶ LescNegotiating(code)
 //   Scanning ──[onPeerPicked, LESC unsupported]──▶ Failed("adapter $name …")
 //   LescNegotiating ──[onLescBondCompleted(bondKey)]──▶ OobConfirming(emoji)
@@ -104,6 +106,7 @@ class PairingViewModel(
     private val bondRemover: BluetoothBondRemover,
     private val companionAssociator: CompanionAssociator = NoopCompanionAssociator(),
     private val associateDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val isLocationEnabled: () -> Boolean = { true },
 ) : ViewModel() {
 
     private val _state: MutableStateFlow<PairingState> =
@@ -122,11 +125,28 @@ class PairingViewModel(
     private var pickedPeer: PeerHandle? = null
 
     /**
-     * Transition Idle → Scanning. Called when the user taps the
-     * "Pair with computer" CTA.
+     * Transition Idle → Scanning, or Idle → LocationOff when Location
+     * is off. Called when the user taps the "Pair with computer" CTA.
      */
     fun onStartScanTapped() {
         if (_state.value !is PairingState.Idle) return
+        if (!isLocationEnabled()) {
+            _state.value = PairingState.LocationOff
+            return
+        }
+        startScanning()
+    }
+
+    /**
+     * Transition LocationOff → Scanning. The user either turned Location
+     * on in the settings or wants to try the picker anyway.
+     */
+    fun onContinueWithoutLocationTapped() {
+        if (_state.value !is PairingState.LocationOff) return
+        startScanning()
+    }
+
+    private fun startScanning() {
         backend.startScan()
         _state.value = PairingState.Scanning
     }
@@ -138,6 +158,7 @@ class PairingViewModel(
      */
     fun onCancelTapped() {
         when (_state.value) {
+            is PairingState.LocationOff -> _state.value = PairingState.Idle
             is PairingState.Scanning, is PairingState.LescNegotiating -> {
                 backend.stopScan()
                 pickedPeer = null
@@ -281,6 +302,11 @@ class PairingViewModel(
         if (_state.value !is PairingState.OobConfirming) return
         removeBondBestEffort()
         _state.value = PairingState.Failed(PairingReasons.OOB_MISMATCH)
+    }
+
+    /** Unregister the backend's receivers so a later attempt starts clean. */
+    override fun onCleared() {
+        backend.cleanup()
     }
 
     /**
