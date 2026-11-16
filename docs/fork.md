@@ -16,7 +16,7 @@ This site documents [D3SOX/syauth](https://github.com/D3SOX/syauth), a fork of [
 - The daemon retries an unlock request while the phone resubscribes to notifications, within the original authentication deadline.
 - It disconnects and reconnects only the phone set in `SYAUTH_RECONNECT_DEVICE`; other Bluetooth devices stay connected.
 - When the Bluetooth adapter disappears or changes, the daemon exits and systemd restarts it against the current adapter. A USB controller can return as `hci1` instead of `hci0` after suspend.
-- `syauth pair` and `syauth status` use BlueZ's default adapter too, instead of assuming `hci0`. When an explicitly named adapter is missing, `pair` lists the adapters BlueZ has.
+- `syauth pair`, `syauth status`, and `syauth doctor` use BlueZ's default adapter too, instead of assuming `hci0`. When an explicitly named adapter is missing, `pair` lists the adapters BlueZ has.
 - The phone app stops its connection when Bluetooth turns off and reconnects when it turns on. It retries until the notification subscription is ready.
 
 See [Bluetooth transport and connection recovery](bluetooth.md).

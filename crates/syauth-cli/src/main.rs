@@ -113,7 +113,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::InstallPam(opts) => run_install(&opts),
         Cmd::UninstallPam(opts) => run_uninstall(&opts),
         Cmd::InstallPresenced(opts) => run_install_presenced(&opts),
-        Cmd::Doctor(opts) => run_doctor_cli(&opts),
+        Cmd::Doctor(opts) => run_doctor_cli(&opts).await,
     }
 }
 
@@ -133,8 +133,8 @@ async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
     Ok(())
 }
 
-fn run_doctor_cli(opts: &DoctorOpts) -> Result<()> {
-    run_doctor(opts).map_err(Into::into)
+async fn run_doctor_cli(opts: &DoctorOpts) -> Result<()> {
+    run_doctor(opts).await.map_err(Into::into)
 }
 
 fn run_revoke_cli(opts: &RevokeOpts) -> Result<()> {
