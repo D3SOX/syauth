@@ -7,7 +7,10 @@
   autoPatchelfHook,
   pkg-config,
   dbus,
+  linux-pam,
   python3,
+  getent,
+  util-linux,
   rustToolchain,
   writeShellScriptBin,
 }:
@@ -47,6 +50,7 @@ rustPlatform.buildRustPackage {
   # runtime as an input so `autoPatchelfHook` searches it and puts it in RPATH.
   buildInputs = [
     dbus
+    linux-pam
     (lib.getLib stdenv.cc.cc)
   ];
   nativeBuildInputs = [
@@ -61,6 +65,9 @@ rustPlatform.buildRustPackage {
   doCheck = true;
   # The recovery test starts a session bus; the sandbox has no /etc/dbus-1.
   nativeCheckInputs = [
+    # The fork's installer tests lock with `flock` and resolve users with `getent`.
+    getent
+    util-linux
     (writeShellScriptBin "dbus-daemon" ''
       args=()
       for arg in "$@"; do
@@ -75,11 +82,18 @@ rustPlatform.buildRustPackage {
 
   # The upstream integration test expects the daemon directly under target/release.
   #
-  # Test binaries link against `libdbus-1.so.3` but only the installed files
-  # get an ELF rpath, so the check phase needs the D-Bus library on the loader
-  # search path for `cargo test` to start the `bluer`-backed tests.
+  # Test binaries link against `libdbus-1.so.3` and `libpam.so.0` but only the
+  # installed files get an ELF rpath, so the check phase needs both libraries on
+  # the loader search path for `cargo test`. The fork's installer tests copy and
+  # run helper scripts, which need a Nix interpreter instead of `/usr/bin/env`.
   preCheck = ''
-    export LD_LIBRARY_PATH="${lib.makeLibraryPath [ dbus ]}''${LD_LIBRARY_PATH:+:}''${LD_LIBRARY_PATH:-}"
+    patchShebangs scripts
+    export LD_LIBRARY_PATH="${
+      lib.makeLibraryPath [
+        dbus
+        linux-pam
+      ]
+    }''${LD_LIBRARY_PATH:+:}''${LD_LIBRARY_PATH:-}"
     mkdir -p target/release
     ln -sfn ../${stdenv.hostPlatform.rust.rustcTarget}/release/syauth-presenced target/release/syauth-presenced
   '';

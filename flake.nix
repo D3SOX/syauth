@@ -109,6 +109,7 @@
               gnumake
               pkg-config
               dbus
+              linux-pam
               openssl
               python3
               git
@@ -116,7 +117,10 @@
               cargo-deny
             ])
             ++ preCommit.enabledPackages;
-            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.dbus ];
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.dbus
+              pkgs.linux-pam
+            ];
             inherit (preCommit) shellHook;
           };
         }

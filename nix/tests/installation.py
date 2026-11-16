@@ -32,7 +32,7 @@ with subtest("private storage and per-user service isolation"):
     machine.wait_for_unit("user@1101.service")
     assert userctl("show syauth-presenced -p StartLimitIntervalUSec --value").strip() == "0"
     machine.wait_until_succeeds("test $(su - alice -c 'XDG_RUNTIME_DIR=/run/user/1100 systemctl --user show syauth-presenced -p NRestarts --value') -ge 3", timeout=60)
-    machine.succeed("journalctl _UID=1100 --no-pager | grep -q 'Bluetooth transport unavailable'")
+    machine.succeed("journalctl _UID=1100 --no-pager | grep -q 'Bluetooth peripheral unavailable'")
     assert bob("XDG_RUNTIME_DIR=/run/user/1101 systemctl --user show syauth-presenced -p ConditionResult --value").strip() == "no"
     assert bob("XDG_RUNTIME_DIR=/run/user/1101 systemctl --user show syauth-presenced -p MainPID --value").strip() == "0"
     bob("test -r /var/lib/syauth/bonds.toml", False)
