@@ -106,10 +106,35 @@ fn fixture() -> PathBuf {
         .join("pam_submission.so")
 }
 
+const MODULE_FILE: &str = "libpam_syauth.so";
+
+/// Locate the cdylib cargo built for this test run. Before Cargo 1.100 it sat
+/// next to the test binary in `deps/`. The newer build-dir layout gives every
+/// unit its own `build/syauth-pam/<hash>/out/`, so look in the sibling unit
+/// directories and take the most recently built module.
+fn pam_module() -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    let exe_dir = exe.parent().unwrap();
+    let beside = exe_dir.join(MODULE_FILE);
+    if beside.is_file() {
+        return beside;
+    }
+    let units = exe_dir.parent().and_then(|unit| unit.parent()).unwrap();
+    std::fs::read_dir(units)
+        .unwrap()
+        .filter_map(|entry| {
+            let module = entry.ok()?.path().join("out").join(MODULE_FILE);
+            let built = module.metadata().ok()?.modified().ok()?;
+            Some((built, module))
+        })
+        .max()
+        .map(|(_, module)| module)
+        .unwrap_or_else(|| panic!("cargo must build the PAM cdylib under {}", units.display()))
+}
+
 fn authenticate(expected: Option<i32>, options: &str, fallback: &str, replies: Vec<Reply>) -> (i32, usize) {
     let dir = tempfile::tempdir().unwrap();
-    let module = std::env::current_exe().unwrap().parent().unwrap().join("libpam_syauth.so");
-    assert!(module.is_file(), "cargo must build the PAM cdylib at {}", module.display());
+    let module = pam_module();
     let fixture = fixture();
     let first = if let Some(expected) = expected {
         format!("auth required {} module={} {expected}", fixture.display(), module.display())
