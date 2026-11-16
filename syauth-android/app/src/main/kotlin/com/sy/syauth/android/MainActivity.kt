@@ -75,6 +75,8 @@ import com.sy.syauth.android.approve.ApproveViewModel
 import com.sy.syauth.android.approve.KeystoreFrameSigner
 import com.sy.syauth.android.approve.UniffiWireSigner
 import com.sy.syauth.android.bg.APPROVE_EXTRA_CHALLENGE_B64
+import com.sy.syauth.android.bg.batteryOptimizationDeepLinkIntent
+import com.sy.syauth.android.bg.isIgnoringBatteryOptimizations
 import com.sy.syauth.android.bg.APPROVE_EXTRA_HOSTNAME
 import com.sy.syauth.android.bg.APPROVE_EXTRA_PEER_ID
 import com.sy.syauth.android.bg.B64_FLAGS
@@ -138,6 +140,14 @@ const val HOME_REVOKE_BUTTON_TAG: String = "syauth.home.revoke"
 
 /** Test tag attached to the "?" diagnostic button on the home route. */
 const val HOME_DIAGNOSTIC_BUTTON_TAG: String = "syauth.home.diagnostic"
+
+/** Test tag on the home card's battery-optimization button. */
+const val HOME_ALLOW_BACKGROUND_TAG: String = "syauth.home.allowBackground"
+
+/** Shown on the home card while Android applies battery optimization to syauth. */
+internal const val BATTERY_OPTIMIZED_TEXT: String =
+    "Battery optimization is on for syauth, so Android can stop it in the background " +
+        "and unlock requests time out."
 
 /** Test tag on the home card's "signing key lost, re-pair" warning. */
 const val HOME_KEY_LOST_TAG: String = "syauth.home.keyLost"
@@ -284,6 +294,13 @@ class MainActivity : FragmentActivity() {
      * Observed by Compose; refreshed after successful pairing and revoke.
      */
     internal val bondRecord = mutableStateOf<BondRecord?>(null)
+
+    /**
+     * True while Android applies battery optimization to syauth. Clearing
+     * app data drops the exemption; refreshed in `onResume` so the home
+     * card updates after the user answers the system dialog.
+     */
+    internal val batteryOptimized = mutableStateOf(false)
 
     /**
      * Runtime permission gate for the post-bond GATT client path.
@@ -553,6 +570,7 @@ class MainActivity : FragmentActivity() {
                         activity = this,
                         approvePayload = approvePayload.value,
                         bondRecord = bondRecord.value,
+                        batteryOptimized = batteryOptimized.value,
                         cdmPairScanner = cdmPairScanner,
                         onRevoke = ::onBondRevokeTapped,
                         onPairingFinished = ::onPairingFinished,
@@ -576,6 +594,11 @@ class MainActivity : FragmentActivity() {
         startObservingForBondedAssociations(record)
         startSyauthCompanionForegroundService()
         scheduleSyauthWatchdog()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        batteryOptimized.value = !isIgnoringBatteryOptimizations(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -627,6 +650,7 @@ private fun SyauthApp(
     activity: FragmentActivity,
     approvePayload: ApprovePayload?,
     bondRecord: BondRecord?,
+    batteryOptimized: Boolean,
     cdmPairScanner: AndroidCdmPairCompanionScanner?,
     onRevoke: () -> Unit,
     onPairingFinished: (PairingState) -> Unit,
@@ -657,6 +681,11 @@ private fun SyauthApp(
                 bondRecord = bondRecord,
                 pairedAtMillis = pairedAtMillis,
                 signingKeyLost = signingKeyLost,
+                batteryOptimized = batteryOptimized,
+                onAllowBackgroundTapped = {
+                    runCatching { activity.startActivity(batteryOptimizationDeepLinkIntent(activity)) }
+                        .onFailure { Log.w(PERMISSION_LOG_TAG, "battery-optimization request failed", it) }
+                },
                 onPairTapped = { navController.navigate(NavRoutes.PAIR) },
                 onRevokeTapped = onRevoke,
                 onDiagnosticTapped = { navController.navigate(NavRoutes.DIAGNOSTIC) },
@@ -880,6 +909,8 @@ private fun HomeRoute(
     bondRecord: BondRecord?,
     pairedAtMillis: Long,
     signingKeyLost: Boolean,
+    batteryOptimized: Boolean,
+    onAllowBackgroundTapped: () -> Unit,
     onPairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
     onDiagnosticTapped: () -> Unit,
@@ -911,6 +942,8 @@ private fun HomeRoute(
                     bondRecord = bondRecord,
                     pairedAtMillis = pairedAtMillis,
                     signingKeyLost = signingKeyLost,
+                    batteryOptimized = batteryOptimized,
+                    onAllowBackgroundTapped = onAllowBackgroundTapped,
                     onRepairTapped = onPairTapped,
                     onRevokeTapped = { revokeDialogState.value = true },
                 )
@@ -962,6 +995,8 @@ private fun PairedHomeBody(
     bondRecord: BondRecord,
     pairedAtMillis: Long,
     signingKeyLost: Boolean,
+    batteryOptimized: Boolean,
+    onAllowBackgroundTapped: () -> Unit,
     onRepairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
 ) {
@@ -980,6 +1015,20 @@ private fun PairedHomeBody(
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             modifier = Modifier.semantics { testTag = HOME_KEY_LOST_TAG },
         )
+    }
+    if (batteryOptimized) {
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = BATTERY_OPTIMIZED_TEXT,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        androidx.compose.material3.TextButton(
+            onClick = onAllowBackgroundTapped,
+            modifier = Modifier.semantics { testTag = HOME_ALLOW_BACKGROUND_TAG },
+        ) {
+            Text(text = "Allow background use")
+        }
     }
     Spacer(modifier = Modifier.height(24.dp))
     androidx.compose.foundation.layout.Row(

@@ -102,6 +102,14 @@
         tools:targetApi="31" />
 
     <!--
+      Lets the home card open Android's "allow background use" dialog
+      (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) when the exemption
+      is missing, for example after the app's data was cleared. Without
+      it the system rejects the request.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
       Declared so `CompanionDeviceManager.associate(...)` is dispatchable —
       Android's CDM service refuses the call otherwise (verified on
       Galaxy S25 Ultra, One UI / Android 15: `IllegalStateException: Must
