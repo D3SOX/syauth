@@ -10,9 +10,14 @@ PlasmaComponents3.Label {
     property string command: ""
     property string connectionState: "unknown"
     property bool polling: visible
+    // Matches KEY_CHANGED_STREAK in syauth-presenced: this many
+    // bad-signature results in a row mean the phone's key changed.
+    readonly property int keyChangedStreak: 3
 
     text: connectionState === "pending"
         ? qsTr("Waiting for approval on your phone. You can also enter your password.")
+        : connectionState === "keyChanged"
+            ? qsTr("Phone key changed — enter your password, then pair the phone again")
         : connectionState === "connected"
             ? qsTr("Phone connected — press Enter to request approval")
             : connectionState === "disconnected"
@@ -36,6 +41,8 @@ PlasmaComponents3.Label {
             const peers = report.daemon.peers;
             if (peers.some(peer => peer.in_flight_challenges > 0)) {
                 connectionState = "pending";
+            } else if (peers.some(peer => peer.bad_signature_streak >= keyChangedStreak)) {
+                connectionState = "keyChanged";
             } else if (peers.some(peer => peer.connected === true)) {
                 connectionState = "connected";
             } else if (peers.length === 0 || peers.every(peer => peer.connected === false)) {

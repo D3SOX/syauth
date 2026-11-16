@@ -112,10 +112,10 @@ async fn rotates_at_minute_boundary() {
         "expected {expected_count} set_session_uuids calls (1 construction + {TICKS} ticks), got {}",
         calls.len()
     );
-    // Each recorded UUID set is a 2-element set: the bonded peer's
-    // `session_uuid_for(bond_key, minute)` PLUS the always-present
-    // pair-mode UUID derived from the zero bond key for the same
-    // minute. Deriving the exact minute index from the test's
+    // Each recorded UUID set holds only the bonded peer's
+    // `session_uuid_for(bond_key, minute)`. The daemon must not
+    // advertise the pair-mode UUID derived from the zero bond key;
+    // `syauth pair` owns pairing. Deriving the exact minute index from the test's
     // virtual clock requires reading `SystemTime::now()`, which the
     // paused tokio clock does not control, so we assert the values
     // belong to the expected sequence around the wall-clock instant
@@ -125,21 +125,11 @@ async fn rotates_at_minute_boundary() {
         .expect("system clock after epoch")
         .as_secs();
     let now_minute = i64::try_from(now_secs / SECONDS_PER_MINUTE).expect("minute fits in i64");
-    let zero_bond = [0u8; syauth_transport::BOND_KEY_BYTES];
     let allowed: HashSet<Uuid> = (now_minute - 2..=now_minute + 2)
-        .flat_map(|m| {
-            [
-                Uuid::from_bytes(session_uuid_for(&BOND_KEY, m)),
-                Uuid::from_bytes(session_uuid_for(&zero_bond, m)),
-            ]
-        })
+        .map(|m| Uuid::from_bytes(session_uuid_for(&BOND_KEY, m)))
         .collect();
     for (i, recorded) in calls.iter().enumerate() {
-        assert_eq!(
-            recorded.len(),
-            2,
-            "call #{i} should be a 2-element UUID set (peer + pair), got {recorded:?}"
-        );
+        assert_eq!(recorded.len(), 1, "call #{i} should hold only the peer's UUID, got {recorded:?}");
         for uuid in recorded {
             assert!(
                 allowed.contains(uuid),

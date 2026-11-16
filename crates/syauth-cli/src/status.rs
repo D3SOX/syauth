@@ -609,6 +609,9 @@ pub fn write_daemon_section(writer: &mut dyn Write, report: &CliStatusReport) ->
                     peer.in_flight_challenges,
                 )?;
             }
+            for peer in peers.iter().filter(|p| p.key_changed()) {
+                writeln!(writer, "warning: {}", peer.key_changed_hint())?;
+            }
         }
         DaemonProbeState::Down { reason } => {
             writeln!(writer, "daemon=down: {reason}")?;

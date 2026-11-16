@@ -231,13 +231,17 @@ update it using the same key to preserve app data. Android 16 may show a native
 tested Pixel successfully paired and approved authentication in compatibility
 mode; this does not establish native 16 KB compliance.
 
-## Pair while the daemon is stopped
+## Pair the phone
 
-The pairing CLI advertises its own service. Stop the presence daemon first so
-both processes do not register competing services on the adapter.
+`syauth pair` is the only pairing path. It advertises the pairing service,
+answers the Bluetooth pairing request, and asks you to confirm both codes. The
+presence daemon doesn't pair and doesn't make the adapter pairable, so it can
+keep running. It picks up the new bond once `syauth pair` writes it. If
+`syauth pair` fails to register its advertisement, the controller has no free
+advertising slot; stop the daemon with `systemctl --user stop syauth-presenced`
+while pairing and start it again afterwards.
 
 ```sh
-systemctl --user stop syauth-presenced
 syauth pair --timeout-secs 300
 ```
 
@@ -258,7 +262,9 @@ syauth pair --timeout-secs 300
 
 If pairing fails, inspect Bluetooth settings on both devices for stale bonds
 before retrying. Only remove the intended phone/computer pairing. Do not reset
-Bluetooth or remove unrelated devices.
+Bluetooth or remove unrelated devices. If pairing keeps failing right after the
+phone accepts it, BlueZ may still hold the phone's old key; see
+[re-pairing fails after removing the phone](how-to/troubleshoot.md#re-pairing-fails-after-removing-the-phone).
 
 Optionally configure the daemon to reconnect only the phone on restart. Use
 the phone identity address shown by `bluetoothctl devices Paired`, not an unrelated

@@ -16,9 +16,9 @@ Without `--adapter`, `pair` and `status` use BlueZ's default adapter. That is `h
 
 `pair --force` replaces the application's existing peer record; it does not reset the Bluetooth system bond. `pair --yes` skips interactive confirmation and is intended for controlled test rigs. `--waybar` and `--yes` are mutually exclusive.
 
-`status --json` reports the daemon section in machine-readable form. A peer's `last_connect_ms_ago` is currently stamped by challenge activity, not a GATT connection event. Use notification subscription logs to establish readiness.
+`status --json` reports the daemon section in machine-readable form. A peer's `last_connect_ms_ago` is currently stamped by challenge activity, not a GATT connection event. Use notification subscription logs to establish readiness. `bad_signature_streak` counts `bad-signature` results since the last verified approval. From three, `status` prints a warning and `doctor` prints a `phone_key_changed_<peer_id>` line and reports `doctor=warn`. See [the phone's key changed](../how-to/troubleshoot.md#the-phones-key-changed).
 
-`doctor --skip-bluez`, `--skip-systemctl`, and `--skip-daemon` explicitly omit those probes for restricted environments. A skipped probe does not establish that its component works.
+`doctor` reports BlueZ's default adapter, the same one the daemon uses, as `bluez_adapter=powered|unpowered|absent|unknown` and names it in `bluez_adapter_name`. `doctor --skip-bluez`, `--skip-systemctl`, and `--skip-daemon` explicitly omit those probes for restricted environments. A skipped probe does not establish that its component works.
 
 ## Installation commands
 

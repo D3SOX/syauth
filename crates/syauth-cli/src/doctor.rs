@@ -18,7 +18,9 @@
 //! 3. `bonds_file = <path>` and `bonds_count = N`.
 //! 4. `keys_dir = <path>`, `keys_files = N`, and one
 //!    `keys_<peer_id>_mode = <octal> [(expected 0600)]` per file.
-//! 5. `bluez_adapter = powered | unpowered | absent | unknown`.
+//! 5. `bluez_adapter = powered | unpowered | absent | unknown` for
+//!    BlueZ's default adapter, followed by `bluez_adapter_name = <hciN>`
+//!    when one exists.
 //! 6. `systemctl_user_unit = active | inactive | unknown`.
 //! 7. `last_log_tail_<i>` for i in 1..=[`DOCTOR_LAST_LOG_TAIL`].
 //! 8. `xdg_runtime_dir = <env-or-fallback>` — flags the SSH-session
@@ -42,7 +44,9 @@ use std::{
 use clap::Parser;
 use serde::Serialize;
 use syauth_core::BondStore;
-use syauth_presenced::{Request, Response, read_frame_blocking, write_frame_blocking};
+use syauth_presenced::{PeerStatus, Request, Response, read_frame_blocking, write_frame_blocking};
+
+use crate::status::{AdapterState, AsyncAdapterProbe, BluerAdapterProbe};
 use thiserror::Error;
 
 // =============================================================================
@@ -214,6 +218,17 @@ pub enum DaemonState {
     },
 }
 
+/// A bonded phone whose signing key no longer matches its bond.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PhoneKeyChanged {
+    /// Bond identifier.
+    pub peer_id: String,
+    /// `bad-signature` outcomes since the last verified signature.
+    pub bad_signature_streak: u32,
+    /// Operator hint: revoke and pair again.
+    pub hint: String,
+}
+
 /// Bonds-file probe outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BondsReport {
@@ -274,6 +289,9 @@ pub struct DoctorReport {
     pub keys: KeysReport,
     /// BlueZ adapter probe: `"powered" | "unpowered" | "absent" | "unknown"`.
     pub bluez_adapter: String,
+    /// Name of BlueZ's default adapter (for example `hci1`); `None`
+    /// when the probe was skipped or found no adapter.
+    pub bluez_adapter_name: Option<String>,
     /// `systemctl --user` probe: `"active" | "inactive" | "unknown"`.
     pub systemctl: String,
     /// Audit-log tail, most-recent-last, capped at
@@ -281,6 +299,9 @@ pub struct DoctorReport {
     pub last_log_tail: Vec<String>,
     /// XDG_RUNTIME_DIR env probe.
     pub xdg_runtime_dir: XdgRuntimeDirReport,
+    /// Bonded phones whose recent approvals kept failing signature
+    /// verification; see `PeerStatus::key_changed`.
+    pub phone_key_changed: Vec<PhoneKeyChanged>,
     /// Summary token: `"ok" | "warn" | "fail"`.
     pub summary: String,
 }
@@ -297,8 +318,13 @@ pub struct DoctorReport {
 /// Returns [`DoctorError::Io`] on stdout I/O failure;
 /// [`DoctorError::Json`] on the `--json` encode path (effectively
 /// unreachable, schema is total).
-pub fn run_doctor(opts: &DoctorOpts) -> Result<(), DoctorError> {
-    let report = build_report(opts);
+pub async fn run_doctor(opts: &DoctorOpts) -> Result<(), DoctorError> {
+    let adapter = if opts.skip_bluez {
+        BluezAdapterReport::unknown()
+    } else {
+        probe_bluez_adapter(&BluerAdapterProbe).await
+    };
+    let report = build_report(opts, adapter);
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     if opts.json {
@@ -316,39 +342,51 @@ pub fn run_doctor(opts: &DoctorOpts) -> Result<(), DoctorError> {
 /// Build the full [`DoctorReport`] by running every probe in order.
 /// Pure with respect to the host except for the probes themselves —
 /// no probe writes anywhere.
-pub fn build_report(opts: &DoctorOpts) -> DoctorReport {
+pub fn build_report(opts: &DoctorOpts, bluez_adapter: BluezAdapterReport) -> DoctorReport {
     let xdg = probe_xdg_runtime_dir();
     let daemon_socket = opts.socket.clone().unwrap_or_else(|| default_socket_path(&xdg.value));
-    let daemon = if opts.skip_daemon {
-        DaemonState::Down {
-            reason: "skipped".to_owned(),
-        }
+    let (daemon, peers) = if opts.skip_daemon {
+        (
+            DaemonState::Down {
+                reason: "skipped".to_owned(),
+            },
+            Vec::new(),
+        )
     } else {
         probe_daemon(&daemon_socket)
     };
+    let phone_key_changed: Vec<PhoneKeyChanged> = peers
+        .iter()
+        .filter(|p| p.key_changed())
+        .map(|p| PhoneKeyChanged {
+            peer_id: p.peer_id.clone(),
+            bad_signature_streak: p.bad_signature_streak,
+            hint: p.key_changed_hint(),
+        })
+        .collect();
     let bonds_file = probe_bonds(&opts.bonds_file);
     let keys = probe_keys(&opts.keys_dir);
-    let bluez_adapter = if opts.skip_bluez {
-        "unknown".to_owned()
-    } else {
-        probe_bluez_adapter()
-    };
     let systemctl = if opts.skip_systemctl {
         "unknown".to_owned()
     } else {
         probe_systemctl()
     };
     let last_log_tail = probe_audit_log_tail(&opts.audit_log);
-    let summary = compute_summary(&daemon, &bonds_file, &keys, &xdg);
+    let mut summary = compute_summary(&daemon, &bonds_file, &keys, &xdg);
+    if summary == SUMMARY_OK && !phone_key_changed.is_empty() {
+        summary = SUMMARY_WARN.to_owned();
+    }
     DoctorReport {
         daemon_socket,
         daemon,
         bonds_file,
         keys,
-        bluez_adapter,
+        bluez_adapter: bluez_adapter.state,
+        bluez_adapter_name: bluez_adapter.name,
         systemctl,
         last_log_tail,
         xdg_runtime_dir: xdg,
+        phone_key_changed,
         summary,
     }
 }
@@ -398,8 +436,15 @@ fn default_socket_path(xdg_runtime_dir: &Path) -> PathBuf {
 /// Probe the daemon by connecting to `socket` and exchanging one
 /// `Request::Status` / `Response::Status` pair. Every failure path
 /// collapses into a `DaemonState::Down { reason }` so the doctor
-/// itself never returns an error.
-fn probe_daemon(socket: &Path) -> DaemonState {
+/// itself never returns an error. Also returns the daemon's peer rows
+/// (empty unless the daemon is up).
+fn probe_daemon(socket: &Path) -> (DaemonState, Vec<PeerStatus>) {
+    let mut peers = Vec::new();
+    let state = probe_daemon_into(socket, &mut peers);
+    (state, peers)
+}
+
+fn probe_daemon_into(socket: &Path, peers_out: &mut Vec<PeerStatus>) -> DaemonState {
     if !socket.exists() {
         return DaemonState::Down {
             reason: "socket-missing".to_owned(),
@@ -429,7 +474,10 @@ fn probe_daemon(socket: &Path) -> DaemonState {
         };
     }
     match read_frame_blocking::<_, Response>(&mut stream) {
-        Ok(Response::Status { .. }) => DaemonState::Up,
+        Ok(Response::Status { peers, .. }) => {
+            *peers_out = peers;
+            DaemonState::Up
+        }
         Ok(other) => DaemonState::Down {
             reason: format!("unexpected-response: {}", response_kind(&other)),
         },
@@ -556,14 +604,48 @@ fn effective_file_mode(path: &Path) -> u32 {
 // Probe: BlueZ adapter. Best-effort, never blocks the doctor.
 // =============================================================================
 
-/// Best-effort BlueZ probe. The `syauth-cli` crate already pulls
-/// `bluer`, but we do not spin up a tokio runtime here — that would
-/// be heavy and the doctor's contract is "fast, best-effort, never
-/// block on DBus". Until S-017 wires a proper async probe, the
-/// production path returns `"unknown"`. Anchored in SPEC §3 scope
-/// item #24 (per-peer metrics arrive in S-017).
-fn probe_bluez_adapter() -> String {
-    "unknown".to_owned()
+/// Upper bound for the BlueZ probe so a stuck D-Bus call cannot hang
+/// the doctor.
+const BLUEZ_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// BlueZ adapter probe result: the `bluez_adapter` token and the
+/// adapter name when one was found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BluezAdapterReport {
+    /// `"powered" | "unpowered" | "absent" | "unknown"`.
+    pub state: String,
+    /// Adapter name, for example `hci1`.
+    pub name: Option<String>,
+}
+
+impl BluezAdapterReport {
+    /// Report for a skipped or timed-out probe.
+    #[must_use]
+    pub fn unknown() -> Self {
+        Self {
+            state: "unknown".to_owned(),
+            name: None,
+        }
+    }
+}
+
+/// Ask BlueZ for its default adapter, the same one `syauth-presenced`,
+/// `syauth pair` and `syauth status` use, so a controller the kernel
+/// renamed (`hci0` to `hci1`) is still found. Folds a timeout into
+/// `unknown` and a missing adapter or BlueZ into `absent`.
+pub async fn probe_bluez_adapter(probe: &dyn AsyncAdapterProbe) -> BluezAdapterReport {
+    let Ok((name, state)) = tokio::time::timeout(BLUEZ_PROBE_TIMEOUT, probe.probe_async(None)).await else {
+        return BluezAdapterReport::unknown();
+    };
+    let (state, name) = match state {
+        AdapterState::Powered => ("powered", Some(name)),
+        AdapterState::Down => ("unpowered", Some(name)),
+        AdapterState::Missing => ("absent", None),
+    };
+    BluezAdapterReport {
+        state: state.to_owned(),
+        name,
+    }
 }
 
 // =============================================================================
@@ -675,12 +757,18 @@ pub fn write_keyvalue(writer: &mut dyn Write, report: &DoctorReport) -> Result<(
         }
     }
     writeln!(writer, "bluez_adapter={}", report.bluez_adapter)?;
+    if let Some(name) = &report.bluez_adapter_name {
+        writeln!(writer, "bluez_adapter_name={name}")?;
+    }
     writeln!(writer, "systemctl_user_unit={}", report.systemctl)?;
     for (idx, line) in report.last_log_tail.iter().enumerate() {
         let i = idx.saturating_add(1);
         writeln!(writer, "last_log_tail_{i}={line}")?;
     }
     write_xdg_runtime_dir(writer, &report.xdg_runtime_dir)?;
+    for peer in &report.phone_key_changed {
+        writeln!(writer, "phone_key_changed_{}={}", peer.peer_id, peer.hint)?;
+    }
     writeln!(writer, "doctor={}", report.summary)?;
     Ok(())
 }
@@ -730,6 +818,44 @@ mod tests {
     use super::*;
 
     const TEST_PEER: &str = "deadbeefcafebabe1234567890abcdef";
+
+    struct FixedProbe(Option<(&'static str, AdapterState)>);
+
+    #[async_trait::async_trait]
+    impl AsyncAdapterProbe for FixedProbe {
+        async fn probe_async(&self, _adapter_id: Option<&str>) -> (String, AdapterState) {
+            match self.0 {
+                Some((name, state)) => (name.to_owned(), state),
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn bluez_probe_reports_the_default_adapter_by_name() {
+        let report = probe_bluez_adapter(&FixedProbe(Some(("hci1", AdapterState::Powered)))).await;
+        assert_eq!(report.state, "powered");
+        assert_eq!(report.name.as_deref(), Some("hci1"));
+        let report = probe_bluez_adapter(&FixedProbe(Some(("hci1", AdapterState::Down)))).await;
+        assert_eq!(report.state, "unpowered");
+    }
+
+    #[tokio::test]
+    async fn bluez_probe_reports_absent_without_an_adapter() {
+        let report = probe_bluez_adapter(&FixedProbe(Some(("hci0", AdapterState::Missing)))).await;
+        assert_eq!(
+            report,
+            BluezAdapterReport {
+                state: "absent".to_owned(),
+                name: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn bluez_probe_reports_unknown_when_bluez_hangs() {
+        assert_eq!(probe_bluez_adapter(&FixedProbe(None)).await, BluezAdapterReport::unknown());
+    }
 
     #[test]
     fn key_file_peer_id_strips_bin_suffix() {
@@ -880,12 +1006,14 @@ mod tests {
                 files: vec![],
             },
             bluez_adapter: "unknown".to_owned(),
+            bluez_adapter_name: None,
             systemctl: "unknown".to_owned(),
             last_log_tail: vec![],
             xdg_runtime_dir: XdgRuntimeDirReport {
                 set: true,
                 value: PathBuf::from("/run/user/1000"),
             },
+            phone_key_changed: vec![],
             summary: SUMMARY_FAIL.to_owned(),
         };
         let mut buf = Vec::new();

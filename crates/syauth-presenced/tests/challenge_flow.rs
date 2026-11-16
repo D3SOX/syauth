@@ -34,8 +34,8 @@ use syauth_core::{
     peer_id_from_pubkey, sign_frame,
 };
 use syauth_presenced::{
-    AuditLog, ChallengeOutcome, DEFAULT_AUTH_TIMEOUT, OUTCOME_REASON_BAD_SIGNATURE, OUTCOME_REASON_OK, OUTCOME_REASON_RESPONSE_TIMEOUT,
-    Orchestrator,
+    AuditLog, ChallengeOutcome, DEFAULT_AUTH_TIMEOUT, KEY_CHANGED_STREAK, OUTCOME_REASON_BAD_SIGNATURE, OUTCOME_REASON_OK,
+    OUTCOME_REASON_RESPONSE_TIMEOUT, Orchestrator,
 };
 use syauth_transport::{BOND_KEY_BYTES, FakePeripheral, Peripheral, PeripheralError};
 use tempfile::TempDir;
@@ -413,6 +413,33 @@ async fn bad_signature_returns_auth_err() {
 
     assert_eq!(count_lines(&audit_path), 1);
     assert_eq!(outcome_columns(&audit_path), vec![OUTCOME_REASON_BAD_SIGNATURE.to_owned()]);
+}
+
+#[tokio::test]
+async fn repeated_bad_signatures_report_a_changed_phone_key_until_one_verifies() {
+    let signing_key = SigningKey::from_bytes(&SIGNING_KEY_SEED);
+    let bond = fixture_bond(&signing_key);
+    let td = TempDir::new().expect("tempdir");
+    let (audit_log, _audit_path) = open_audit_log(&td);
+    let fake = FakePeripheral::new();
+    let orchestrator = build_orchestrator(fake.clone(), bond.clone(), audit_log).await;
+
+    // A phone whose Keystore key is gone answers with the all-zero
+    // deny frame, which fails verification like a foreign key does.
+    for _ in 0..KEY_CHANGED_STREAK {
+        fake.inject_response(&bond.peer_id, vec![0u8; SIGNATURE_LEN]);
+        let outcome = orchestrator.issue_challenge(&bond.peer_id, DEFAULT_AUTH_TIMEOUT).await;
+        assert!(matches!(outcome, ChallengeOutcome::BadSignature), "got {outcome:?}");
+    }
+    let peer = orchestrator.peers_snapshot().await.pop().expect("one peer");
+    assert_eq!(peer.bad_signature_streak, KEY_CHANGED_STREAK);
+    assert!(peer.key_changed());
+    assert!(peer.key_changed_hint().contains(&format!("syauth revoke --id {}", bond.peer_id)));
+
+    drive_one_ok_challenge(&orchestrator, &fake, &signing_key, &bond).await;
+    let peer = orchestrator.peers_snapshot().await.pop().expect("one peer");
+    assert_eq!(peer.bad_signature_streak, 0, "a verified signature resets the streak");
+    assert!(!peer.key_changed());
 }
 
 #[tokio::test]

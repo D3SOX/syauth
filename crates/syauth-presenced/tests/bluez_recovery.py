@@ -41,6 +41,8 @@ def serve_mock():
 
         @dbus.service.method(PROPERTIES, in_signature="ssv", out_signature="")
         def Set(self, interface, prop, value):
+            if prop in ("Pairable", "Discoverable"):
+                root.pairing_changes.append(f"{self.controller}.{prop}={bool(value)}")
             self.props[prop] = value
 
         @dbus.service.method("org.bluez.GattManager1", in_signature="oa{sv}", out_signature="")
@@ -59,7 +61,7 @@ def serve_mock():
 
         @dbus.service.method("org.bluez.LEAdvertisingManager1", in_signature="o", out_signature="")
         def UnregisterAdvertisement(self, path):
-            pass
+            root.withdrawn.append(self.controller)
 
     class Root(dbus.service.Object):
         def __init__(self):
@@ -67,6 +69,9 @@ def serve_mock():
             self.apps = []
             self.advertisements = []
             self.fail_advertising = False
+            self.agents = []
+            self.withdrawn = []
+            self.pairing_changes = []
             super().__init__(name, "/")
 
         @dbus.service.method(OBJECTS, out_signature="a{oa{sa{sv}}}")
@@ -91,6 +96,14 @@ def serve_mock():
         def Registrations(self):
             return self.apps, self.advertisements
 
+        @dbus.service.method(CONTROL, out_signature="as")
+        def Withdrawn(self):
+            return self.withdrawn
+
+        @dbus.service.method(CONTROL, out_signature="asas")
+        def Pairing(self):
+            return self.agents, self.pairing_changes
+
         @dbus.service.method(CONTROL, in_signature="b", out_signature="")
         def FailAdvertising(self, fail):
             self.fail_advertising = bool(fail)
@@ -98,7 +111,7 @@ def serve_mock():
     class Agent(dbus.service.Object):
         @dbus.service.method("org.bluez.AgentManager1", in_signature="os", out_signature="")
         def RegisterAgent(self, path, capability):
-            pass
+            root.agents.append(str(path))
 
         @dbus.service.method("org.bluez.AgentManager1", in_signature="o", out_signature="")
         def RequestDefaultAgent(self, path):
@@ -129,6 +142,7 @@ class BluetoothRecovery(unittest.TestCase):
         self.addCleanup(bus.close)
         self.control = dbus.Interface(bus.get_object("org.bluez", "/", introspect=False), CONTROL)
         self.binary = os.environ["SYAUTH_DAEMON_BINARY"]
+        self.write_bond()
 
     def start(self, command, **kwargs):
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
@@ -146,6 +160,22 @@ class BluetoothRecovery(unittest.TestCase):
                 process.wait(timeout=5)
         process.stdout.close()
         process.stderr.close()
+
+    def write_bond(self):
+        # The daemon registers GATT only for bonded peers; pairing belongs
+        # to `syauth pair`. peer_id is blake3(pubkey)[..16] for 32 x 0x11.
+        (self.root / "bonds.toml").write_text(
+            'schema_version = 1\n\n[[bond]]\n'
+            'peer_id = "91f47563f3da92036f6fb227245b2833"\n'
+            'pubkey = "' + "11" * 32 + '"\n'
+            'name = "test phone"\n'
+            'created_at = "2026-01-01T00:00:00Z"\n\n'
+            '[bond.status]\nkind = "Bonded"\n')
+        keys = self.root / "keys"
+        keys.mkdir(mode=0o700)
+        key = keys / "91f47563f3da92036f6fb227245b2833.bin"
+        key.write_bytes(bytes(range(32)))
+        key.chmod(0o600)
 
     def daemon(self):
         return self.start([self.binary, "--socket", str(self.root / "auth.sock"),
@@ -170,6 +200,34 @@ class BluetoothRecovery(unittest.TestCase):
             self.fail("daemon stayed alive with unusable Bluetooth registrations")
         self.assertFalse((self.root / "auth.sock").exists())
         self.assertFalse((self.root / "daemon.pid").exists())
+
+    def test_daemon_leaves_pairing_to_the_cli(self):
+        self.control.AddAdapter("hci0")
+        self.wait_advertised(self.daemon(), "hci0")
+        agents, changes = self.control.Pairing()
+        self.assertEqual(list(agents), [], "the daemon must not register a pairing agent")
+        self.assertEqual(list(changes), [], "the daemon must not make the adapter pairable or discoverable")
+
+    def test_last_bond_revoked_withdraws_the_advertisement(self):
+        self.control.AddAdapter("hci0")
+        daemon = self.daemon()
+        self.wait_advertised(daemon, "hci0")
+        registered = list(self.control.Registrations()[1]).count("hci0")
+        bonds = self.root / "bonds.toml"
+        bonds.write_text(bonds.read_text().replace('kind = "Bonded"', 'kind = "Revoked"\nreason = "test"'))
+        daemon.send_signal(signal.SIGHUP)
+        deadline = time.monotonic() + 5
+        while "hci0" not in self.control.Withdrawn():
+            if time.monotonic() > deadline:
+                self.fail("daemon kept its advertisement after the last bond was revoked")
+            time.sleep(0.02)
+        # A daemon that re-advertises an empty set does so right after the
+        # withdrawal, in the same call; watch briefly for that registration.
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            self.assertEqual(list(self.control.Registrations()[1]).count("hci0"), registered,
+                             "daemon advertised without a bonded peer")
+            time.sleep(0.02)
 
     def test_only_hci1_is_available_after_resume(self):
         self.control.AddAdapter("hci1")

@@ -50,6 +50,33 @@ Drop the option, or pass one of the listed names. `ls /sys/class/bluetooth` and 
 
 Android's companion-device picker finds the desktop only while Location is on. The scan starts, but returns nothing with Location off. Turn Location on, keep the desktop pairing window open, and tap **Pair with computer** again. The app warns about this before it opens the picker. You can turn Location off after pairing.
 
+## Re-pairing fails after removing the phone
+
+`bluetoothctl remove <phone>` can leave the phone's old identity resolving key (IRK) in BlueZ's storage. The controller then still resolves the phone's private address to its old identity, which `btmon` shows as `Resolved Public` with the old address. Every new pairing fails right after the phone accepts it, with `SMP_DHKEY_CHK_FAIL` in the phone's log.
+
+Remove the stale pairing on both sides:
+
+1. On the phone, open Bluetooth settings and forget the computer.
+2. On the computer, find the adapter address and the phone's identity address:
+
+    ```sh
+    bluetoothctl list
+    bluetoothctl devices
+    ```
+
+3. With BlueZ stopped, delete only that phone's stored pairing and cache entry, then start BlueZ again:
+
+    ```sh
+    sudo systemctl stop bluetooth
+    sudo rm -r /var/lib/bluetooth/<adapter-address>/<phone-address>
+    sudo rm -f /var/lib/bluetooth/<adapter-address>/cache/<phone-address>
+    sudo systemctl start bluetooth
+    ```
+
+4. Pair again with `syauth pair`.
+
+Leave the other entries under `/var/lib/bluetooth` alone. They hold the pairings of your other Bluetooth devices.
+
 ## Pairing fails while reading the host key
 
 If Android reports `host-pubkey read failed status=1`, check that it is running the current companion. The exchange reads the host key **before** sending the phone key; sending the phone key allows the desktop to replace the transient pair service. Reusing those handles afterward can fail. Both pairing and persistent connections explicitly request LE transport; enabling a Bluetooth audio profile is not required.
@@ -67,6 +94,22 @@ StrongBox support for Ed25519 varies. The app retries using Android Keystore wit
 The current response budget is eight seconds. Approve a request you initiated while it is active. A desktop timeout does not send authenticated cancellation to dismiss the phone's screen; a lingering prompt can be stale. Initiate a new request and dismiss the old screen rather than repeatedly approving it.
 
 `bad-signature` or `replay` cannot grant access through syauth. A phone-side Cancel currently sends 64 zero bytes, which the daemon classifies as `bad-signature`. The caller's PAM policy determines whether another module can authenticate afterward; consult [the result table](../reference/protocol.md#results-returned-to-pam).
+
+## The phone's key changed
+
+The phone signs approvals with a key in Android Keystore. Keystore keys are not part of app backups. Restoring the app's data from a backup brings back the pairing but not the key, and changing the phone's biometrics can invalidate the key. Every approval then fails with `bad-signature`.
+
+After three `bad-signature` results in a row with no verified approval in between, `syauth status` and `syauth doctor` print a warning naming the phone, and the KDE lockscreen shows "Phone key changed". The app's home screen also says that the key is gone. Declining three requests in a row on the phone triggers the same warning, because a Cancel also arrives as `bad-signature`.
+
+To recover, revoke the old bond and pair again:
+
+```sh
+syauth list
+syauth revoke --id <peer_id> --reason "phone key lost"
+syauth pair
+```
+
+On the phone, tap **Re-pair**. Copying key material between phones is not supported.
 
 ## Undo a PAM installation
 

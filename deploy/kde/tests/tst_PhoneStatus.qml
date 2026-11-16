@@ -51,6 +51,19 @@ TestCase {
         compare(status.connectionState, "disconnected");
     }
 
+    function test_changed_phone_key_asks_for_a_new_pairing() {
+        status.update(0, report([{connected: true, bad_signature_streak: 2}]));
+        compare(status.connectionState, "connected");
+        status.update(0, report([{connected: true, bad_signature_streak: 3}]));
+        compare(status.connectionState, "keyChanged");
+        verify(status.text.includes("enter your password"));
+        verify(status.text.includes("pair the phone again"));
+        status.update(0, report([{connected: true, in_flight_challenges: 1, bad_signature_streak: 3}]));
+        compare(status.connectionState, "pending");
+        status.update(0, report([{connected: true, bad_signature_streak: 0}]));
+        compare(status.connectionState, "connected");
+    }
+
     function test_only_the_static_phone_instruction_is_replaced() {
         verify(status.isSelectorPrompt("Password, or press Enter to use your phone: "));
         verify(!status.isSelectorPrompt("Password: "));

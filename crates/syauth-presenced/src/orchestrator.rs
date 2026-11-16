@@ -84,10 +84,6 @@ pub const RELOAD_TRIGGER_RPC: &str = "rpc";
 /// Audit-line `trigger=` value emitted on an inotify-driven reload.
 pub const RELOAD_TRIGGER_INOTIFY: &str = "inotify";
 
-/// Audit-line tag for [`ReloadTrigger::Pair`]: the daemon-owned pair
-/// flow completed a new bond and asked the orchestrator to pick it up.
-pub const RELOAD_TRIGGER_PAIR: &str = "pair";
-
 /// Audit-line `trigger=` value emitted on the test-shim reload path.
 /// `pub(crate)` because no production caller should ever emit this
 /// trigger; the constant is only used by the in-process test seam
@@ -356,10 +352,6 @@ pub enum ReloadTrigger {
     /// `notify::recommended_watcher` fired on `bonds.toml` (SPEC §8
     /// Risks row, belt-and-suspenders for SIGHUP delivery loss).
     Inotify,
-    /// Daemon-owned pair flow committed a new bond and asked the
-    /// orchestrator to reload. Distinct trigger so the audit line
-    /// distinguishes "new pair" from "operator-driven reload".
-    Pair,
     /// In-process test seam (`Orchestrator::signal_reload_for_test`).
     /// Production callers cannot construct this variant by name —
     /// the constructor is `pub(crate)`.
@@ -374,7 +366,6 @@ impl ReloadTrigger {
             ReloadTrigger::Sighup => RELOAD_TRIGGER_SIGHUP,
             ReloadTrigger::Rpc => RELOAD_TRIGGER_RPC,
             ReloadTrigger::Inotify => RELOAD_TRIGGER_INOTIFY,
-            ReloadTrigger::Pair => RELOAD_TRIGGER_PAIR,
             ReloadTrigger::Test => RELOAD_TRIGGER_TEST,
         }
     }
@@ -492,6 +483,8 @@ struct PeerLiveness {
     /// "connect" event — see SPEC §3 scope item #24 + the journey
     /// doc).
     last_connect_at: Option<SystemTime>,
+    /// `bad-signature` outcomes since the last verified signature.
+    bad_signature_streak: u32,
 }
 
 /// Snapshot of a peer's shared state captured by
@@ -854,6 +847,7 @@ impl Orchestrator {
         let outcome = self
             .run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms, &mut cancelled)
             .await;
+        record_signature_result(&peer_state.liveness, &outcome).await;
         drop(permit);
         outcome
     }
@@ -1111,6 +1105,7 @@ impl Orchestrator {
                 last_connect_ms_ago: ms_since(now, liveness.last_connect_at),
                 current_session_uuid: Uuid::from_bytes(uuid_bytes),
                 in_flight_challenges: in_flight,
+                bad_signature_streak: liveness.bad_signature_streak,
             });
         }
         rows
@@ -1133,6 +1128,18 @@ async fn stamp_liveness(slot: &Arc<TokioMutex<PeerLiveness>>, now: SystemTime) {
     let mut guard = slot.lock().await;
     guard.last_challenge_at = Some(now);
     guard.last_connect_at = Some(now);
+}
+
+/// Count consecutive `bad-signature` outcomes; a verified signature
+/// resets the streak. Other outcomes (timeouts, cancellations) say
+/// nothing about the phone's key and leave it unchanged.
+async fn record_signature_result(slot: &Arc<TokioMutex<PeerLiveness>>, outcome: &ChallengeOutcome) {
+    let mut guard = slot.lock().await;
+    match outcome {
+        ChallengeOutcome::BadSignature => guard.bad_signature_streak = guard.bad_signature_streak.saturating_add(1),
+        ChallengeOutcome::Ok { .. } => guard.bad_signature_streak = 0,
+        _ => {}
+    }
 }
 
 /// Compute `now - then` in whole milliseconds. `None` if `then` is
@@ -1178,25 +1185,14 @@ fn parse_signature(bytes: &[u8]) -> Option<Signature> {
 }
 
 /// Build the union of `session_uuid_for(bond_key, minute)` across
-/// every peer in `snapshot`, plus the always-present pair-mode UUID
-/// derived from the zero bond key. The pair UUID keeps the daemon
-/// discoverable to a phone trying to add a new bond even when no
-/// existing peer is bonded; for an already-bonded host it sits
-/// alongside the per-peer rotating UUIDs.
+/// every peer in `snapshot`. The daemon advertises no pair-mode UUID;
+/// `syauth pair` advertises that one while its pairing window is open.
 fn build_uuid_union(snapshot: &[(String, [u8; BOND_KEY_BYTES])], minute: i64) -> HashSet<Uuid> {
-    let mut set: HashSet<Uuid> = snapshot
+    snapshot
         .iter()
         .map(|(_id, key)| Uuid::from_bytes(session_uuid_for(key, minute)))
-        .collect();
-    let pair_uuid = Uuid::from_bytes(session_uuid_for(&PAIR_MODE_ZERO_BOND_KEY, minute));
-    set.insert(pair_uuid);
-    set
+        .collect()
 }
-
-/// Zero bond key used to derive the pair-mode advertise UUID. The
-/// phone's CDM pair-mode scan filter derives the same UUID from
-/// the same zero key + minute; matching is the rendezvous.
-const PAIR_MODE_ZERO_BOND_KEY: [u8; BOND_KEY_BYTES] = [0u8; BOND_KEY_BYTES];
 
 /// Look up the bond_key for `peer_id` inside a captured snapshot.
 /// Returns a reference to a zero-array when the peer is missing

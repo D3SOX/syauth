@@ -138,6 +138,37 @@ pub struct PeerStatus {
     /// Count of in-flight challenges. Bounded to `{0, 1}` by SPEC
     /// §3 scope item #7 (per-peer `Semaphore(1)`).
     pub in_flight_challenges: u32,
+    /// `bad-signature` outcomes since the last verified signature,
+    /// counted since daemon start. A run of them means the phone signs
+    /// with a key that no longer matches the bond (or keeps sending the
+    /// deny frame because its key is gone); see [`KEY_CHANGED_STREAK`].
+    /// Absent (zero) on older daemons.
+    #[serde(default)]
+    pub bad_signature_streak: u32,
+}
+
+/// [`PeerStatus::bad_signature_streak`] at which status surfaces tell
+/// the operator to re-pair the phone.
+pub const KEY_CHANGED_STREAK: u32 = 3;
+
+impl PeerStatus {
+    /// `true` once [`KEY_CHANGED_STREAK`] approvals in a row failed
+    /// signature verification.
+    #[must_use]
+    pub fn key_changed(&self) -> bool {
+        self.bad_signature_streak >= KEY_CHANGED_STREAK
+    }
+
+    /// Operator hint for [`Self::key_changed`] peers.
+    #[must_use]
+    pub fn key_changed_hint(&self) -> String {
+        format!(
+            "{} approvals in a row from phone {} failed signature verification. Unless you declined them on the \
+             phone, its signing key no longer matches this bond, for example after restoring the app from a backup. \
+             Run `syauth revoke --id {}` and pair the phone again.",
+            self.bad_signature_streak, self.peer_id, self.peer_id
+        )
+    }
 }
 
 /// Errors the framing layer can surface to callers. All variants
@@ -394,6 +425,7 @@ mod tests {
                 last_connect_ms_ago: None,
                 current_session_uuid: uuid::Uuid::from_bytes([0xab; 16]),
                 in_flight_challenges: 1,
+                bad_signature_streak: 0,
             }],
             started_at: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
         };
