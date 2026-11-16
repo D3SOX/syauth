@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import Error as PlaywrightError, expect, sync_playwright
 from yaml import safe_load
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +69,21 @@ def check_links():
             if link.fragment and target in documents:
                 assert unquote(link.fragment) in documents[target].ids, f"Missing anchor: {path}: {href}"
     print(f"PASS local links and anchors ({len(documents)} HTML pages)")
+
+
+def preview(target, name, **options):
+    """Save a review screenshot of a page or locator under PREVIEW.
+
+    Chromium's CDP capture occasionally fails with "Unable to capture
+    screenshot" on loaded CI runners. Retry only that error.
+    """
+    for attempt in range(3):
+        try:
+            target.screenshot(path=str(PREVIEW / name), **options)
+            return
+        except PlaywrightError as error:
+            if attempt == 2 or "Unable to capture screenshot" not in str(error):
+                raise
 
 
 def no_overflow(page):
@@ -279,9 +294,9 @@ def check_chapters_and_payloads(page):
     expect(widget).to_have_attribute("data-step", "0")
     expect(widget.get_by_role("button", name="Previous step", exact=True)).to_be_disabled()
     seek(widget, 2)
-    widget.screenshot(path=str(PREVIEW / "desktop-unlock-approval.png"), style=".md-header, .md-top { visibility: hidden !important; }")
+    preview(widget, "desktop-unlock-approval.png", style=".md-header, .md-top { visibility: hidden !important; }")
     seek(widget, 5)
-    widget.screenshot(path=str(PREVIEW / "desktop-unlock-verification.png"), style=".md-header, .md-top { visibility: hidden !important; }")
+    preview(widget, "desktop-unlock-verification.png", style=".md-header, .md-top { visibility: hidden !important; }")
     widget.get_by_role("button", name="Restart", exact=True).click()
     pairing = page.locator('.sy-mechanics[data-flow="pairing"]')
     seek(pairing, 1)
@@ -292,7 +307,7 @@ def check_chapters_and_payloads(page):
         assert matches, f"Bluetooth comparison code is missing from {actor}"
         codes.append(re.sub(r"\D", "", matches[0]))
     assert codes[0] == codes[1], "Bluetooth comparison values must match on both devices"
-    pairing.screenshot(path=str(PREVIEW / "desktop-pairing-comparison.png"), style=".md-header, .md-top { visibility: hidden !important; }")
+    preview(pairing, "desktop-pairing-comparison.png", style=".md-header, .md-top { visibility: hidden !important; }")
     for index, label in [(2, "Read host public key"), (3, "Write phone public key")]:
         seek(pairing, index)
         expect(pairing.locator(".sy-mechanics__stage strong")).to_have_text(label)
@@ -305,7 +320,7 @@ def check_chapters_and_payloads(page):
     expect(discovery.locator('[data-part="uuid"]').first).to_be_visible()
     seek(discovery, 4)
     expect(discovery.locator(".sy-mechanics__stage")).to_contain_text("CCCD")
-    discovery.screenshot(path=str(PREVIEW / "desktop-discovery-subscription.png"), style=".md-header, .md-top { visibility: hidden !important; }")
+    preview(discovery, "desktop-discovery-subscription.png", style=".md-header, .md-top { visibility: hidden !important; }")
     discovery.get_by_role("button", name="Restart", exact=True).click()
     print("PASS chapters/back/reset, focus, payloads, key containment, matching pairing codes and subscription")
 
@@ -438,7 +453,7 @@ def check_tablet(browser, base, wide_views):
     page.goto(base + MECHANICS)
     no_overflow(page)
     check_all_narrow_steps(page, wide_views)
-    page.locator('.sy-mechanics[data-flow="unlock"]').screenshot(path=str(PREVIEW / "tablet-unlock.png"), style=".md-header, .md-top { visibility: hidden !important; }")
+    preview(page.locator('.sy-mechanics[data-flow="unlock"]'), "tablet-unlock.png", style=".md-header, .md-top { visibility: hidden !important; }")
     context.close()
     print("PASS tablet portrait reflow, readable labels and unclipped scenes across all 20 steps")
 
@@ -458,7 +473,7 @@ def check_plain_and_mobile(browser, base, wide_views):
         page.goto(base + path)
         no_overflow(page)
         if not path:
-            page.screenshot(path=str(PREVIEW / "mobile-home.png"), full_page=True)
+            preview(page, "mobile-home.png", full_page=True)
     check_all_narrow_steps(page, wide_views)
     widget = page.locator('.sy-mechanics[data-flow="pairing"]')
     for button in widget.get_by_role("button").all() + [widget.get_by_label("Playback speed", exact=True)]:
@@ -466,11 +481,11 @@ def check_plain_and_mobile(browser, base, wide_views):
         assert bounds["height"] >= 44 and bounds["width"] >= 44, "Mobile touch controls need 44px targets"
     widget.get_by_role("button", name="Next step", exact=True).click()
     expect(widget.locator(".sy-mechanics__counter")).to_contain_text("Step 2 of")
-    widget.screenshot(path=str(PREVIEW / "mobile-pairing-comparison.png"), style=".md-header, .md-top { visibility: hidden !important; }")
+    preview(widget, "mobile-pairing-comparison.png", style=".md-header, .md-top { visibility: hidden !important; }")
     approval = page.locator('.sy-mechanics[data-flow="unlock"]')
     seek(approval, 2)
-    approval.screenshot(path=str(PREVIEW / "mobile-unlock-approval.png"), style=".md-header, .md-top { visibility: hidden !important; }")
-    page.screenshot(path=str(PREVIEW / "mobile-mechanics.png"), full_page=True)
+    preview(approval, "mobile-unlock-approval.png", style=".md-header, .md-top { visibility: hidden !important; }")
+    preview(page, "mobile-mechanics.png", full_page=True)
     context.close()
     print("PASS script-free transcripts, hidden empty widgets and mobile layout")
 
@@ -529,9 +544,9 @@ def main():
             check_search(page, base)
             page.keyboard.press("Escape")
             check_code_contrast(page, base)
-            page.screenshot(path=str(PREVIEW / "desktop-home.png"), full_page=True)
+            preview(page, "desktop-home.png", full_page=True)
             page.goto(base + MECHANICS)
-            page.screenshot(path=str(PREVIEW / "desktop-mechanics.png"), full_page=True)
+            preview(page, "desktop-mechanics.png", full_page=True)
             check_reduced(browser, base)
             check_plain_and_mobile(browser, base, wide_views)
             check_tablet(browser, base, wide_views)
