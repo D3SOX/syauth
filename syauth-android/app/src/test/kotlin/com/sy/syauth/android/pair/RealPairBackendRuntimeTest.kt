@@ -297,7 +297,7 @@ class RealPairBackendRuntimeTest {
         var rejected: Int = -1
         val receiver = PairingBroadcastReceiver(
             onAccept = { accepted = it },
-            onReject = { rejected = it },
+            onReject = { variant, _ -> rejected = variant },
         )
         val intent = Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
             putExtra(EXTRA_PAIRING_VARIANT_NAME, PAIRING_VARIANT_PASSKEY_CONFIRMATION)
@@ -314,7 +314,7 @@ class RealPairBackendRuntimeTest {
         var rejected: Int = -1
         val receiver = PairingBroadcastReceiver(
             onAccept = { accepted = it },
-            onReject = { rejected = it },
+            onReject = { variant, _ -> rejected = variant },
         )
         val intent = Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
             putExtra(EXTRA_PAIRING_VARIANT_NAME, JUST_WORKS_VARIANT)
@@ -442,6 +442,34 @@ class RealPairBackendRuntimeTest {
         assertTrue("second attempt must reach the ViewModel, got $delivered", delivered.last() is LescResult.Bonded)
         backend.cleanup()
     }
+
+    @Test
+    fun rejected_pairing_request_fails_only_the_picked_peer() {
+        val pairingReg = RecordingReceiverRegistrar()
+        val backend = makeBackend(
+            companionScanner = null,
+            gattExchange = null,
+            pairingRegistrar = pairingReg,
+            adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter(),
+        )
+        val delivered = mutableListOf<LescResult>()
+        backend.setOnLescResultCallback { delivered.add(it) }
+        backend.pickPeer(PeerHandle(id = FIXTURE_PEER_ADDR, name = FIXTURE_PEER_NAME))
+        val receiver = pairingReg.registered.single()
+
+        receiver.onReceive(ApplicationProvider.getApplicationContext(), justWorksRequest("AA:BB:CC:DD:EE:99"))
+        assertTrue("another device's pairing request must not fail this attempt", delivered.isEmpty())
+
+        receiver.onReceive(ApplicationProvider.getApplicationContext(), justWorksRequest(FIXTURE_PEER_ADDR))
+        assertTrue("got $delivered", delivered.single() is LescResult.Failed)
+        backend.cleanup()
+    }
+
+    private fun justWorksRequest(address: String): Intent =
+        Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
+            putExtra(EXTRA_PAIRING_VARIANT_NAME, JUST_WORKS_VARIANT)
+            putExtra(BluetoothDevice.EXTRA_DEVICE, android.bluetooth.BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address))
+        }
 
     @Test
     fun failed_os_bond_for_another_device_is_ignored() {

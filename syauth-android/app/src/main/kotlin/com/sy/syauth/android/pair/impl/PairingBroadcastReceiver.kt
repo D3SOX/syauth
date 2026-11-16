@@ -76,7 +76,7 @@ public fun decideAndroidPairingVariant(variant: Int, passkey: Int): PairingVaria
  */
 public class PairingBroadcastReceiver(
     private val onAccept: (Int) -> Unit,
-    private val onReject: (Int) -> Unit,
+    private val onReject: (variant: Int, address: String?) -> Unit,
 ) : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -106,7 +106,7 @@ public class PairingBroadcastReceiver(
                 Log.w(PAIRING_RECEIVER_LOG_TAG, "rejected pairing variant ${decision.variant}")
                 runCatching { device?.setPairingConfirmation(false) }
                 abortBroadcastIfPossible()
-                onReject(decision.variant)
+                onReject(decision.variant, device?.address)
             }
         }
     }

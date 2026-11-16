@@ -387,9 +387,11 @@ public class RealPairBackend(
     /** Pairing-request receiver registered at init. */
     private val pairingReceiver: PairingBroadcastReceiver = PairingBroadcastReceiver(
         onAccept = { passkey -> lastPairingCode = passkey.toString().padStart(LESC_CODE_DIGITS, '0') },
-        onReject = { variant ->
-            Log.w(REAL_PAIR_BACKEND_LOG_TAG, "pairing variant rejected variant=$variant")
-            resolve(LescResult.Failed("OS pairing variant rejected: $variant"))
+        onReject = { variant, address ->
+            Log.w(REAL_PAIR_BACKEND_LOG_TAG, "pairing variant rejected variant=$variant addr=$address")
+            if (isPickedPeer(address)) {
+                resolve(LescResult.Failed("OS pairing variant rejected: $variant"))
+            }
         },
     )
 
@@ -616,12 +618,21 @@ public class RealPairBackend(
     }
 
     /**
+     * True when [address] is the peer the user picked. Pairing broadcasts
+     * for other devices must not fail this attempt: a failed result makes
+     * the ViewModel remove the picked computer's bond.
+     */
+    private fun isPickedPeer(address: String?): Boolean {
+        val picked = pickedAddress ?: return false
+        return address == null || address.equals(picked, ignoreCase = true)
+    }
+
+    /**
      * Called by the bond-state receiver on `BOND_BONDING -> BOND_NONE`.
      * Ignores other devices and transitions before the user picked a peer.
      */
     private fun onBondFailedFromReceiver(address: String?, reason: String) {
-        val picked = pickedAddress ?: return
-        if (address != null && !address.equals(picked, ignoreCase = true)) return
+        if (!isPickedPeer(address)) return
         Log.w(REAL_PAIR_BACKEND_LOG_TAG, "OS bond failed addr=$address: $reason")
         resolve(LescResult.Failed(reason))
     }

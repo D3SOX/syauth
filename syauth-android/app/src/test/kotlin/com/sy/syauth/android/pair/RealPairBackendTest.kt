@@ -87,7 +87,7 @@ class RealPairBackendTest {
         var rejectCount: Int = 0
         val receiver = PairingBroadcastReceiver(
             onAccept = { acceptedPasskey = it },
-            onReject = { rejectCount += 1 },
+            onReject = { _, _ -> rejectCount += 1 },
         )
         val intent = Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
             putExtra(EXTRA_PAIRING_VARIANT_NAME, PAIRING_VARIANT_PASSKEY_CONFIRMATION)
@@ -104,7 +104,7 @@ class RealPairBackendTest {
         var rejectVariant: Int? = null
         val receiver = PairingBroadcastReceiver(
             onAccept = { acceptedPasskey = it },
-            onReject = { rejectVariant = it },
+            onReject = { variant, _ -> rejectVariant = variant },
         )
         val intent = Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
             putExtra(EXTRA_PAIRING_VARIANT_NAME, JUST_WORKS_VARIANT)
