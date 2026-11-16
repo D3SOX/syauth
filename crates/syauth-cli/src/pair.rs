@@ -40,10 +40,6 @@ use crate::oob::{OOB_BOND_KEY_BYTES, OOB_WORD_COUNT, oob_code_for_bond};
 // Named constants — every magic number a test would otherwise hand-type.
 // ---------------------------------------------------------------------------
 
-/// Default BlueZ adapter id. Matches SPEC §4.1 and `syauth-transport`'s
-/// `DEFAULT_ADAPTER_NAME` so the two crates agree.
-pub const DEFAULT_ADAPTER_NAME: &str = "hci0";
-
 /// Default `--bond-dir` per SPEC §4.4.
 pub const DEFAULT_BOND_DIR: &str = "/var/lib/syauth";
 
@@ -114,9 +110,10 @@ pub const PAM_BOND_KEY_FILE_MODE: u32 = 0o600;
 /// CLI options for the `pair` subcommand.
 #[derive(Debug, Parser, Clone)]
 pub struct PairOpts {
-    /// BlueZ adapter id (e.g. `hci0`).
-    #[arg(long, default_value = DEFAULT_ADAPTER_NAME)]
-    pub adapter: String,
+    /// BlueZ adapter id (e.g. `hci1`). Defaults to BlueZ's default
+    /// adapter, which follows the controller when the kernel renames it.
+    #[arg(long)]
+    pub adapter: Option<String>,
 
     /// Restrict the picker to peers whose advertised name contains this
     /// substring. With `--yes`, the call fails with `AmbiguousPeer` if more
@@ -362,14 +359,15 @@ impl Read for OperatorLineReader {
 /// the integration test implements this without touching a real radio.
 #[async_trait]
 pub trait PairBackend: Send + Sync {
-    /// Open and probe the configured adapter. Returns the capability
-    /// snapshot on success; `Err(PairError::AdapterMissing { name })` if the
-    /// adapter is unknown to BlueZ.
-    async fn adapter_info(&self, adapter_id: &str) -> Result<AdapterInfo, PairError>;
+    /// Open and probe `adapter_id`, or BlueZ's default adapter when `None`.
+    /// Returns the capability snapshot on success;
+    /// `Err(PairError::AdapterMissing { .. })` if the adapter is unknown to
+    /// BlueZ and `Err(PairError::NoAdapter)` if BlueZ has none at all.
+    async fn adapter_info(&self, adapter_id: Option<&str>) -> Result<AdapterInfo, PairError>;
 
     /// Convenience helper layered on [`Self::adapter_info`]: returns `true`
     /// iff the adapter advertises LE Secure Connections.
-    async fn adapter_supports_lesc(&self, adapter_id: &str) -> Result<bool, PairError> {
+    async fn adapter_supports_lesc(&self, adapter_id: Option<&str>) -> Result<bool, PairError> {
         Ok(self.adapter_info(adapter_id).await?.supports_lesc)
     }
 
@@ -452,12 +450,18 @@ pub enum PairingPhase {
 /// Typed error surface for the `pair` flow.
 #[derive(Debug, Error)]
 pub enum PairError {
-    /// Configured adapter is unknown to BlueZ.
-    #[error("bluetooth adapter '{name}' not found")]
+    /// Configured adapter is unknown to BlueZ, or was removed mid-flow.
+    #[error("bluetooth adapter '{name}' not found; {}", available_adapters_hint(available))]
     AdapterMissing {
         /// The adapter id the operator asked for.
         name: String,
+        /// Adapter ids BlueZ reported when the error was raised, sorted.
+        available: Vec<String>,
     },
+
+    /// No `--adapter` was given and BlueZ has no adapter to default to.
+    #[error("no bluetooth adapter found; check `bluetoothctl list` and `rfkill list`")]
+    NoAdapter,
 
     /// Adapter exists but does not advertise the LE Secure Connections bit.
     /// The DoD requires this error to name the issue.
@@ -590,6 +594,19 @@ impl std::fmt::Display for PairingVariant {
             PairingVariant::PasskeyEntry => "passkey-entry",
             PairingVariant::OobOnly => "oob-only",
         })
+    }
+}
+
+/// Second half of the [`PairError::AdapterMissing`] message: what the
+/// operator can pass to `--adapter` instead.
+fn available_adapters_hint(available: &[String]) -> String {
+    if available.is_empty() {
+        "BlueZ reports no adapters".to_owned()
+    } else {
+        format!(
+            "available adapters: {}; omit --adapter to use BlueZ's default",
+            available.join(", ")
+        )
     }
 }
 
@@ -788,7 +805,7 @@ pub async fn run_pair_with_io(
     reader: &mut dyn BufRead,
     writer: &mut dyn Write,
 ) -> Result<PairingPhase, PairError> {
-    let info = backend.adapter_info(&opts.adapter).await?;
+    let info = backend.adapter_info(opts.adapter.as_deref()).await?;
     writeln!(
         writer,
         "adapter {} ready (LE Secure Connections: {})",
@@ -1111,9 +1128,9 @@ mod tests {
 
     #[async_trait]
     impl PairBackend for ScriptedTestBackend {
-        async fn adapter_info(&self, adapter_id: &str) -> Result<AdapterInfo, PairError> {
+        async fn adapter_info(&self, adapter_id: Option<&str>) -> Result<AdapterInfo, PairError> {
             Ok(AdapterInfo {
-                name: adapter_id.to_owned(),
+                name: adapter_id.unwrap_or("hci0").to_owned(),
                 supports_lesc: true,
             })
         }
@@ -1199,7 +1216,7 @@ mod tests {
 
         let td = tempfile::tempdir().expect("tempdir for bonds");
         let opts = PairOpts {
-            adapter: DEFAULT_ADAPTER_NAME.to_owned(),
+            adapter: None,
             peer: None,
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             bond_dir: td.path().join("syauth"),
@@ -1235,7 +1252,7 @@ mod tests {
     /// Helper: build a [`PairOpts`] for the already-bonded re-pair tests.
     fn already_bonded_opts(td: &tempfile::TempDir, force: bool) -> PairOpts {
         PairOpts {
-            adapter: DEFAULT_ADAPTER_NAME.to_owned(),
+            adapter: None,
             peer: None,
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             bond_dir: td.path().join("syauth"),

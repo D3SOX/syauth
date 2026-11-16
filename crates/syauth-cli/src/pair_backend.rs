@@ -105,8 +105,9 @@ type PhonePubkeyMailbox = Arc<Mutex<Option<[u8; PAIR_PUBKEY_LEN]>>>;
 /// `syauth pair` invocation; one instance owns one GATT application +
 /// LE advertisement + agent registration for the lifetime of the call.
 pub struct BluerPairBackend {
-    /// BlueZ adapter id (e.g. `"hci0"`).
-    adapter_id: String,
+    /// BlueZ adapter id (e.g. `"hci1"`); `None` selects BlueZ's default
+    /// adapter.
+    adapter_id: Option<String>,
     /// Host's Ed25519 pubkey, served on the `host-pubkey` characteristic
     /// read. The corresponding private key never leaves this process;
     /// the pubkey is the only material that needs to cross the link.
@@ -137,12 +138,13 @@ pub struct BluerPairBackend {
 }
 
 impl BluerPairBackend {
-    /// Construct a new backend bound to `adapter_id`, deriving its
-    /// `host_pubkey` from the supplied [`SigningKey`].
-    pub fn new(adapter_id: &str, signing_key: &SigningKey) -> Self {
+    /// Construct a new backend bound to `adapter_id` (BlueZ's default
+    /// adapter when `None`), deriving its `host_pubkey` from the supplied
+    /// [`SigningKey`].
+    pub fn new(adapter_id: Option<&str>, signing_key: &SigningKey) -> Self {
         let host_pubkey: [u8; PAIR_PUBKEY_LEN] = signing_key.verifying_key().to_bytes();
         Self {
-            adapter_id: adapter_id.to_owned(),
+            adapter_id: adapter_id.map(str::to_owned),
             host_pubkey,
             confirm_channel: Arc::new(Mutex::new(None)),
             phone_pubkey_mailbox: Arc::new(Mutex::new(None)),
@@ -321,20 +323,11 @@ impl PairBackend for BluerPairBackend {
         self.operator_lines.clone()
     }
 
-    async fn adapter_info(&self, adapter_id: &str) -> Result<AdapterInfo, PairError> {
+    async fn adapter_info(&self, adapter_id: Option<&str>) -> Result<AdapterInfo, PairError> {
         let session = bluer::Session::new().await.map_err(map_bluer)?;
-        let adapter = session.adapter(adapter_id).map_err(|err| match err.kind {
-            bluer::ErrorKind::NotFound => PairError::AdapterMissing {
-                name: adapter_id.to_owned(),
-            },
-            _ => PairError::Backend { reason: err.to_string() },
-        })?;
-        adapter
-            .set_powered(true)
-            .await
-            .map_err(|err| PairError::Backend { reason: err.to_string() })?;
+        let adapter = open_powered_adapter(&session, adapter_id).await?;
         Ok(AdapterInfo {
-            name: adapter_id.to_owned(),
+            name: adapter.name().to_owned(),
             supports_lesc: true,
         })
     }
@@ -348,39 +341,26 @@ impl PairBackend for BluerPairBackend {
         // exchange happens in `initiate_lesc_with_peer`.
         let session = bluer::Session::new().await.map_err(map_bluer)?;
         let _agent_handle = session.register_agent(self.build_agent()).await.map_err(map_bluer)?;
-        let adapter = session.adapter(&self.adapter_id).map_err(|err| match err.kind {
-            bluer::ErrorKind::NotFound => PairError::AdapterMissing {
-                name: self.adapter_id.clone(),
-            },
-            _ => PairError::Backend { reason: err.to_string() },
-        })?;
-        adapter
-            .set_powered(true)
-            .await
-            .map_err(|err| PairError::Backend { reason: err.to_string() })?;
-        adapter
-            .set_discoverable(true)
-            .await
-            .map_err(|err| PairError::Backend { reason: err.to_string() })?;
-        adapter
-            .set_pairable(true)
-            .await
-            .map_err(|err| PairError::Backend { reason: err.to_string() })?;
+        let adapter = open_powered_adapter(&session, self.adapter_id.as_deref()).await?;
+        on_adapter(&session, &adapter, "set_discoverable", adapter.set_discoverable(true).await).await?;
+        on_adapter(&session, &adapter, "set_pairable", adapter.set_pairable(true).await).await?;
 
         let (char_control, char_handle) = characteristic_control();
         let app = Application {
             services: Self::build_pair_services(self.host_pubkey, char_handle),
             ..Default::default()
         };
-        let app_handle = adapter.serve_gatt_application(app).await.map_err(|err| PairError::Backend {
-            reason: format!("serve_gatt_application: {err}"),
-        })?;
+        let app_handle = on_adapter(
+            &session,
+            &adapter,
+            "serve_gatt_application",
+            adapter.serve_gatt_application(app).await,
+        )
+        .await?;
 
         let initial_minute = unix_minute_floor();
         let initial_advertisement = Self::build_advertisement(initial_minute);
-        let initial_adv_handle = adapter.advertise(initial_advertisement).await.map_err(|err| PairError::Backend {
-            reason: format!("advertise: {err}"),
-        })?;
+        let initial_adv_handle = on_adapter(&session, &adapter, "advertise", adapter.advertise(initial_advertisement).await).await?;
 
         if let Ok(mut g) = self.app_handle.lock() {
             *g = Some(app_handle);
@@ -744,11 +724,60 @@ fn json_string_field(text: &str, key: &str) -> Option<String> {
 }
 
 fn map_bluer(err: bluer::Error) -> PairError {
+    PairError::Backend { reason: err.to_string() }
+}
+
+/// Open `adapter_id`, or BlueZ's default adapter when `None`, and power it
+/// on. `Session::adapter` only builds a D-Bus path, so `set_powered` is the
+/// first call that notices a missing adapter.
+async fn open_powered_adapter(session: &bluer::Session, adapter_id: Option<&str>) -> Result<bluer::Adapter, PairError> {
+    let adapter = match adapter_id {
+        Some(name) => session.adapter(name).map_err(map_bluer)?,
+        None => session.default_adapter().await.map_err(|err| match err.kind {
+            bluer::ErrorKind::NotFound => PairError::NoAdapter,
+            _ => PairError::Backend {
+                reason: format!("select default adapter: {err}"),
+            },
+        })?,
+    };
+    on_adapter(session, &adapter, "set_powered", adapter.set_powered(true).await).await?;
+    Ok(adapter)
+}
+
+/// Map the result of a call on `adapter`. A `NotFound` (D-Bus
+/// `UnknownObject`) means the adapter is gone, so it becomes
+/// [`PairError::AdapterMissing`] listing the adapters BlueZ still has.
+async fn on_adapter<T>(
+    session: &bluer::Session,
+    adapter: &bluer::Adapter,
+    context: &str,
+    result: bluer::Result<T>,
+) -> Result<T, PairError> {
+    let err = match result {
+        Ok(value) => return Ok(value),
+        Err(err) => err,
+    };
+    let available = match err.kind {
+        bluer::ErrorKind::NotFound => session.adapter_names().await.unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Err(map_adapter_error(adapter.name(), available, context, err))
+}
+
+/// Pure half of [`on_adapter`], split out so the mapping is unit-testable
+/// without BlueZ.
+fn map_adapter_error(adapter: &str, mut available: Vec<String>, context: &str, err: bluer::Error) -> PairError {
     match err.kind {
-        bluer::ErrorKind::NotFound => PairError::AdapterMissing {
-            name: "<unknown>".to_owned(),
+        bluer::ErrorKind::NotFound => {
+            available.sort();
+            PairError::AdapterMissing {
+                name: adapter.to_owned(),
+                available,
+            }
+        }
+        _ => PairError::Backend {
+            reason: format!("{context}: {err}"),
         },
-        _ => PairError::Backend { reason: err.to_string() },
     }
 }
 
@@ -800,14 +829,64 @@ mod tests {
     fn new_records_host_pubkey_from_signing_key() {
         let sk = fixed_signing_key();
         let expected: [u8; 32] = sk.verifying_key().to_bytes();
-        let backend = BluerPairBackend::new("hci0", &sk);
+        let backend = BluerPairBackend::new(Some("hci1"), &sk);
         assert_eq!(backend.host_pubkey, expected);
-        assert_eq!(backend.adapter_id, "hci0");
+        assert_eq!(backend.adapter_id.as_deref(), Some("hci1"));
+    }
+
+    /// A renumbered controller (`hci0` gone, `hci1` present) makes BlueZ
+    /// answer `UnknownObject`, which bluer reports as `NotFound`. That must
+    /// name the adapter and the alternatives, not surface as a backend error.
+    #[test]
+    fn not_found_on_adapter_call_maps_to_adapter_missing_with_alternatives() {
+        let err = bluer::Error {
+            kind: bluer::ErrorKind::NotFound,
+            message: String::new(),
+        };
+
+        let mapped = map_adapter_error("hci0", vec!["hci2".to_owned(), "hci1".to_owned()], "set_powered", err);
+
+        match &mapped {
+            PairError::AdapterMissing { name, available } => {
+                assert_eq!(name, "hci0");
+                assert_eq!(available, &["hci1".to_owned(), "hci2".to_owned()]);
+            }
+            other => panic!("expected AdapterMissing, got {other:?}"),
+        }
+        assert_eq!(
+            mapped.to_string(),
+            "bluetooth adapter 'hci0' not found; available adapters: hci1, hci2; omit --adapter to use BlueZ's default"
+        );
+    }
+
+    #[test]
+    fn adapter_missing_without_alternatives_says_so() {
+        let err = bluer::Error {
+            kind: bluer::ErrorKind::NotFound,
+            message: String::new(),
+        };
+
+        let mapped = map_adapter_error("hci0", Vec::new(), "set_powered", err);
+
+        assert_eq!(mapped.to_string(), "bluetooth adapter 'hci0' not found; BlueZ reports no adapters");
+    }
+
+    #[test]
+    fn other_adapter_errors_keep_their_context() {
+        let err = bluer::Error {
+            kind: bluer::ErrorKind::NotReady,
+            message: "Resource Not Ready".to_owned(),
+        };
+
+        match map_adapter_error("hci1", Vec::new(), "set_discoverable", err) {
+            PairError::Backend { reason } => assert!(reason.starts_with("set_discoverable: "), "{reason}"),
+            other => panic!("expected Backend, got {other:?}"),
+        }
     }
 
     #[test]
     fn install_confirm_handler_replaces_previous_handler() {
-        let backend = BluerPairBackend::new("hci0", &fixed_signing_key());
+        let backend = BluerPairBackend::new(Some("hci1"), &fixed_signing_key());
         backend.install_confirm_handler(Box::new(|_p| true));
         backend.install_confirm_handler(Box::new(|_p| false));
         assert!(backend.confirm_channel.lock().is_ok());
@@ -829,7 +908,7 @@ mod tests {
     /// answer could never land and BlueZ got no reply at all.
     #[test]
     fn stdio_confirm_accepts_when_the_operator_answers_the_queue() {
-        let backend = BluerPairBackend::new("hci0", &fixed_signing_key());
+        let backend = BluerPairBackend::new(Some("hci1"), &fixed_signing_key());
         backend.install_os_confirm(ConfirmSource::Stdio);
         let lines = backend.operator_lines();
         std::thread::spawn(move || {
@@ -875,7 +954,7 @@ mod tests {
     /// it must stay reject-only, and it must be explicit.
     #[test]
     fn missing_confirm_surface_rejects_numeric_comparison() {
-        let backend = BluerPairBackend::new("hci0", &fixed_signing_key());
+        let backend = BluerPairBackend::new(Some("hci1"), &fixed_signing_key());
 
         assert!(
             !backend.confirm_os_pairing(TEST_PASSKEY),

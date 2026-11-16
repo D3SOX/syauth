@@ -59,6 +59,8 @@ use tokio::{
 // ---------------------------------------------------------------------------
 
 const TEST_ADAPTER: &str = "hci0";
+/// Adapter the mock reports as BlueZ's default when no `--adapter` is given.
+const MOCK_DEFAULT_ADAPTER: &str = "hci1";
 const TEST_PEER_NAME: &str = "alex-pixel";
 const TEST_PEER_ADDR: &str = "AA:BB:CC:DD:EE:01";
 const TEST_PEER_NAME_SPARE: &str = "alex-pixel-spare";
@@ -88,7 +90,7 @@ fn bond_dir_path(td: &TempDir) -> std::path::PathBuf {
 
 fn pair_opts(td: &TempDir, peer_filter: Option<&str>, timeout_secs: u64, yes: bool) -> PairOpts {
     PairOpts {
-        adapter: TEST_ADAPTER.to_owned(),
+        adapter: Some(TEST_ADAPTER.to_owned()),
         peer: peer_filter.map(str::to_owned),
         timeout_secs,
         bond_dir: bond_dir_path(td),
@@ -175,10 +177,10 @@ impl MockPairBackend {
 
 #[async_trait]
 impl PairBackend for MockPairBackend {
-    async fn adapter_info(&self, adapter_id: &str) -> Result<AdapterInfo, PairError> {
+    async fn adapter_info(&self, adapter_id: Option<&str>) -> Result<AdapterInfo, PairError> {
         let supports_lesc = self.cfg.lock().expect("cfg lock").supports_lesc;
         Ok(AdapterInfo {
-            name: adapter_id.to_owned(),
+            name: adapter_id.unwrap_or(MOCK_DEFAULT_ADAPTER).to_owned(),
             supports_lesc,
         })
     }
@@ -263,6 +265,26 @@ async fn pair_golden_flow_writes_bond_and_list_shows_it() {
     // `run_list` would print the same content; we exercise it indirectly via
     // the library helper above to keep the test in-process.
     let _ = list_opts(&td);
+}
+
+// Without `--adapter` the flow asks the backend for BlueZ's default adapter
+// instead of assuming `hci0`, which vanishes when the kernel renames it.
+#[tokio::test]
+async fn pair_without_adapter_flag_uses_backend_default_adapter() {
+    let td = temp_bond_dir();
+    let backend = MockPairBackend::new(MockConfig::golden());
+    let opts = PairOpts {
+        adapter: None,
+        ..pair_opts(&td, None, TIMEOUT_SECS_LOOSE, true)
+    };
+
+    let (phase, out) = drive_pair(&opts, &backend, "").await.expect("default-adapter pair must succeed");
+
+    assert_eq!(phase, PairingPhase::Bonded);
+    assert!(
+        out.contains(&format!("adapter {MOCK_DEFAULT_ADAPTER} ready")),
+        "banner must name the resolved default adapter: {out}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +483,7 @@ fn pair_opts_round_trip_via_struct_default_paths() {
     let opts = pair_opts(&td, Some(TEST_PEER_NAME), TIMEOUT_SECS_LOOSE, true);
     let path: &Path = &opts.bond_dir;
     assert!(path.starts_with(td.path()));
-    assert_eq!(opts.adapter, TEST_ADAPTER);
+    assert_eq!(opts.adapter.as_deref(), Some(TEST_ADAPTER));
     assert_eq!(opts.timeout_secs, TIMEOUT_SECS_LOOSE);
     assert!(opts.yes);
     assert_eq!(opts.peer.as_deref(), Some(TEST_PEER_NAME));

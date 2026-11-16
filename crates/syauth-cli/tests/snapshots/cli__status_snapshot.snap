@@ -7,7 +7,7 @@ Print adapter state, advertising state, bond count, and the most recent unlock o
 Usage: syauth status [OPTIONS]
 
 Options:
-      --adapter <ADAPTER>    BlueZ adapter id (e.g. `hci0`) [default: hci0]
+      --adapter <ADAPTER>    BlueZ adapter id (e.g. `hci1`). Defaults to BlueZ's default adapter, which follows the controller when the kernel renames it
       --bond-dir <BOND_DIR>  Directory holding the bonds file. Defaults to SPEC's `/var/lib/syauth/`. Tests inject a tempdir [default: /var/lib/syauth]
       --last-log <LAST_LOG>  Path to the rolling unlock log. Defaults to `<bond-dir>/last.log`. Tests inject a fixture path
       --socket <SOCKET>      Override the daemon Unix-socket path. If unset, defaults to `${XDG_RUNTIME_DIR}/syauth/auth.sock` (or `/run/user/<uid>/syauth/auth.sock` when env is missing)

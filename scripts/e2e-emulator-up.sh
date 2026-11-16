@@ -29,7 +29,6 @@ readonly ENV_FILE_NAME=".env.e2e"
 readonly ADB_BOOT_TIMEOUT_SECS="180"
 readonly OOB_WAIT_TIMEOUT_SECS="60"
 readonly PEER_BOND_ID_VAR="SYAUTH_E2E_PEER_BOND_ID"
-readonly DEFAULT_ADAPTER="hci0"
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -161,10 +160,9 @@ log "captured OOB hex (${#OOB_HEX} chars)"
 # the OOB code from the argument. The flag is gated on a stderr warning so
 # a production operator cannot accidentally use it.
 # -----------------------------------------------------------------------------
-log "running scripted syauth pair against adapter $DEFAULT_ADAPTER"
+log "running scripted syauth pair against BlueZ's default adapter"
 PAIR_LOG="/tmp/syauth-e2e-pair.log"
 if ! cargo run --quiet -p syauth-cli -- pair \
-        --adapter "$DEFAULT_ADAPTER" \
         --yes \
         --scripted-oob "$OOB_HEX" \
         >"$PAIR_LOG" 2>&1; then

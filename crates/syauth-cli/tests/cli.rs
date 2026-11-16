@@ -109,6 +109,13 @@ fn pair_help_exposes_real_pairing_options() {
     for option in ["--adapter", "--bond-dir", "--timeout-secs", "--waybar"] {
         assert!(help.contains(option), "missing pairing option {option}: {help}");
     }
+    // The kernel can renumber the controller (`hci0` → `hci1`), so the flag
+    // must fall back to BlueZ's default adapter rather than a fixed id.
+    assert!(!help.contains("[default: hci0]"), "--adapter must not default to hci0: {help}");
+    assert!(
+        help.contains("Defaults to BlueZ's default adapter"),
+        "--adapter help must name the fallback: {help}"
+    );
 }
 
 #[test]

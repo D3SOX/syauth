@@ -128,7 +128,7 @@ async fn run_pair_cli(opts: &PairOpts) -> Result<()> {
     let mut secret = [0u8; SIGNING_KEY_SECRET_BYTES];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut secret);
     let signing_key = SigningKey::from_bytes(&secret);
-    let backend = BluerPairBackend::new(&opts.adapter, &signing_key);
+    let backend = BluerPairBackend::new(opts.adapter.as_deref(), &signing_key);
     run_pair(opts, &backend).await?;
     Ok(())
 }

@@ -124,7 +124,7 @@ fn tc04_bond_key_converges_for_matching_inputs_on_both_ends() {
 #[test]
 fn tc05_pair_discovery_uuid_rotates_between_minute_slots() {
     let host_sk = SigningKey::from_bytes(&SEED_HOST);
-    let backend = BluerPairBackend::new("hci0", &host_sk);
+    let backend = BluerPairBackend::new(None, &host_sk);
     let _ = backend; // backend has no public accessor; this is a smoke test.
     let a = session_uuid_for(&[0u8; 32], TEST_MINUTE);
     let b = session_uuid_for(&[0u8; 32], TEST_MINUTE + 1);
@@ -171,8 +171,8 @@ fn dev001_remarch_pair_discovery_uuid_rotates_between_n_and_n_minus_1() {
 async fn tc09_adapter_missing_surfaces_typed_error_not_panic() {
     use syauth_cli::pair::PairBackend;
     let host_sk = SigningKey::from_bytes(&SEED_HOST);
-    let backend = BluerPairBackend::new("hci99-does-not-exist", &host_sk);
-    let result = backend.adapter_info("hci99-does-not-exist").await;
+    let backend = BluerPairBackend::new(Some("hci99-does-not-exist"), &host_sk);
+    let result = backend.adapter_info(Some("hci99-does-not-exist")).await;
     // On a CI host with BlueZ not running we get a Backend error
     // wrapping the dbus failure; on a host with BlueZ but no such
     // adapter we get AdapterMissing. Either is acceptable — the

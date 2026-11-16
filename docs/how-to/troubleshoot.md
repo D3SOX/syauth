@@ -34,6 +34,18 @@ Check Android notification permission, companion association, battery-optimizati
 
 The current desktop keeps its GATT application registered when a notification session closes; `notification session closed; awaiting re-subscribe` is the expected recovery message. A build that repeatedly logs `rebuilding GATT application` is using the older recovery path. Update both sides before comparing behavior.
 
+## Pairing reports a missing adapter
+
+`syauth pair` and `syauth status` use BlueZ's default adapter unless you pass `--adapter`. The kernel can rename a controller after a reset or suspend, for example from `hci0` to `hci1`. An explicit `--adapter` that names the old controller then fails:
+
+```text
+error: bluetooth adapter 'hci0' not found; available adapters: hci1; omit --adapter to use BlueZ's default
+```
+
+Drop the option, or pass one of the listed names. `ls /sys/class/bluetooth` and `busctl tree org.bluez` show the current names.
+
+`no bluetooth adapter found` means BlueZ has no adapter at all. Check that `bluetooth.service` is running and that `rfkill list` shows the controller as unblocked.
+
 ## Pairing fails while reading the host key
 
 If Android reports `host-pubkey read failed status=1`, check that it is running the current companion. The exchange reads the host key **before** sending the phone key; sending the phone key allows the desktop to replace the transient pair service. Reusing those handles afterward can fail. Both pairing and persistent connections explicitly request LE transport; enabling a Bluetooth audio profile is not required.
