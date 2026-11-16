@@ -87,6 +87,8 @@ rustPlatform.buildRustPackage {
   # the loader search path for `cargo test`. The fork's installer tests copy and
   # run helper scripts, which need a Nix interpreter instead of `/usr/bin/env`.
   preCheck = ''
+    # patchShebangs skips files without the executable bit.
+    chmod +x scripts/install-kde-status.py
     patchShebangs scripts
     export LD_LIBRARY_PATH="${
       lib.makeLibraryPath [
