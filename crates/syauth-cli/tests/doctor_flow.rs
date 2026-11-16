@@ -29,7 +29,7 @@ use std::{
 };
 
 use assert_cmd::Command;
-use syauth_presenced::{Request, Response, read_frame_blocking, write_frame_blocking};
+use syauth_presenced::{PeerStatus, Request, Response, read_frame_blocking, write_frame_blocking};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -62,6 +62,10 @@ struct FakeDaemon {
 
 impl FakeDaemon {
     fn new(socket: PathBuf) -> Self {
+        Self::with_peers(socket, vec![])
+    }
+
+    fn with_peers(socket: PathBuf, peers: Vec<PeerStatus>) -> Self {
         let listener = UnixListener::bind(&socket).expect("bind fake daemon listener");
         listener.set_nonblocking(false).expect("blocking listener");
         let (tx, _rx) = mpsc::channel::<()>();
@@ -72,7 +76,7 @@ impl FakeDaemon {
                 if let Ok(req) = read_frame_blocking::<_, Request>(&mut stream) {
                     if matches!(req, Request::Status) {
                         let resp = Response::Status {
-                            peers: vec![],
+                            peers,
                             started_at: SystemTime::now(),
                         };
                         let _ = write_frame_blocking(&mut stream, &resp);
@@ -126,6 +130,50 @@ fn reports_daemon_up_when_socket_responds() {
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
     assert!(stdout.contains("daemon=up"), "expected daemon=up in:\n{stdout}");
+}
+
+// A bonded phone whose approvals keep failing verification makes the
+// doctor warn and print the re-pair hint.
+#[test]
+fn warns_when_a_phone_key_no_longer_matches() {
+    let td = TempDir::new().expect("tempdir");
+    let runtime_dir = make_dir(&td, "syauth");
+    let socket = runtime_dir.join("auth.sock");
+    let peer_id = "515e3df50ef84109e0fbb3a5c2a1957c";
+    let _daemon = FakeDaemon::with_peers(
+        socket.clone(),
+        vec![PeerStatus {
+            connected: Some(true),
+            peer_id: peer_id.to_owned(),
+            last_challenge_ms_ago: Some(1_000),
+            last_connect_ms_ago: Some(1_000),
+            current_session_uuid: uuid::Uuid::from_bytes([0xd9; 16]),
+            in_flight_challenges: 0,
+            bad_signature_streak: 4,
+        }],
+    );
+
+    let bond_dir = make_dir(&td, "bonds");
+    let keys_dir = make_dir(&td, "keys");
+    let out = syauth()
+        .args(["doctor", "--socket"])
+        .arg(&socket)
+        .arg("--bonds-file")
+        .arg(bond_dir.join("bonds.toml"))
+        .arg("--keys-dir")
+        .arg(&keys_dir)
+        .arg("--audit-log")
+        .arg(td.path().join("last.log"))
+        .arg("--skip-systemctl")
+        .arg("--skip-bluez")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains(&format!("phone_key_changed_{peer_id}=4 approvals in a row")),
+        "expected key-changed line in:\n{stdout}"
+    );
+    assert!(stdout.contains("doctor=warn"), "expected doctor=warn in:\n{stdout}");
 }
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ See [Bluetooth transport and connection recovery](bluetooth.md).
 ## Pairing
 
 - `syauth pair` is the only pairing path. Upstream's daemon also kept the adapter pairable and discoverable, registered a Bluetooth agent that accepted every numeric-comparison request, and saved a bond for any phone that wrote a key to its pair service. It also took the default agent away from `syauth pair`, so running both at once broke pairing. The fork's daemon does none of this. See [pair a phone](how-to/pair-and-revoke.md).
+- After three `bad-signature` results in a row from a bonded phone, `syauth status`, `syauth doctor`, and the KDE lockscreen say that the phone's key changed and that it needs a new pairing. This happens when the app's data is restored from a backup without its Keystore key. See [the phone's key changed](how-to/troubleshoot.md#the-phones-key-changed).
 
 ## Android companion
 

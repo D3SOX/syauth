@@ -206,8 +206,10 @@ client. The selected executable must support `status --json`. No root access is
 needed. The next lockscreen shows connected, disconnected, or unavailable status
 and keeps password entry available. During a phone request it shows "Waiting for
 approval on your phone. You can also enter your password." When the request
-finishes or is cancelled, the connection message returns. Status checks never
-request approval.
+finishes or is cancelled, the connection message returns. After three
+`bad-signature` results in a row it shows "Phone key changed" until an approval
+verifies again; see [the phone's key changed](how-to/troubleshoot.md#the-phones-key-changed).
+Status checks never request approval.
 
 The label polls once per second and reports unavailable after three seconds
 without a usable reply. `connected` comes from the current GATT notification

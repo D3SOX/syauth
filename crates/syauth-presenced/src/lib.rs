@@ -26,8 +26,8 @@ pub use orchestrator::{
     SECONDS_PER_MINUTE, SHORT_UUID_HEX_LEN, align_to_next_minute,
 };
 pub use rpc::{
-    FrameError, LENGTH_PREFIX_BYTES, MAX_FRAME_LEN, PeerStatus, Request, Response, decode_frame, encode_frame, read_frame,
-    read_frame_blocking, write_frame, write_frame_blocking,
+    FrameError, KEY_CHANGED_STREAK, LENGTH_PREFIX_BYTES, MAX_FRAME_LEN, PeerStatus, Request, Response, decode_frame, encode_frame,
+    read_frame, read_frame_blocking, write_frame, write_frame_blocking,
 };
 pub use runtime::{
     BOND_KEY_FILE_EXT, Config, DEFAULT_AUDIT_LOG_PATH, DEFAULT_BONDS_FILE, DEFAULT_KEYS_DIR, DEFAULT_SOCKET_BASENAME, InjectedResponse,

@@ -101,6 +101,7 @@ fn peer_row(peer_id: &str) -> PeerStatus {
         last_connect_ms_ago: Some(TEST_LAST_CONNECT_MS),
         current_session_uuid: uuid::Uuid::from_bytes([0xd9; 16]),
         in_flight_challenges: 0,
+        bad_signature_streak: 0,
     }
 }
 
@@ -130,6 +131,36 @@ fn reports_per_peer_liveness() {
     assert!(stdout.contains("daemon=up"), "expected daemon=up in:\n{stdout}");
     assert!(stdout.contains(TEST_PEER_A), "expected peer A in:\n{stdout}");
     assert!(stdout.contains(TEST_PEER_B), "expected peer B in:\n{stdout}");
+}
+
+// A peer whose approvals keep failing verification gets a re-pair hint.
+#[test]
+fn warns_when_a_phone_key_no_longer_matches() {
+    let td = TempDir::new().expect("tempdir");
+    let runtime_dir = make_dir(&td, "syauth");
+    let socket = runtime_dir.join("auth.sock");
+    let bond_dir = make_dir(&td, "bonds");
+    let mut stale = peer_row(TEST_PEER_A);
+    stale.bad_signature_streak = 3;
+    let _daemon = FakeStatusDaemon::new(socket.clone(), vec![stale, peer_row(TEST_PEER_B)], SystemTime::now());
+
+    let out = syauth()
+        .args(["status", "--socket"])
+        .arg(&socket)
+        .arg("--adapter")
+        .arg("absent-adapter")
+        .arg("--bond-dir")
+        .arg(&bond_dir)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    let warning = format!("warning: 3 approvals in a row from phone {TEST_PEER_A} failed signature verification.");
+    assert!(stdout.contains(&warning), "expected key-changed warning in:\n{stdout}");
+    assert!(
+        stdout.contains(&format!("syauth revoke --id {TEST_PEER_A}")),
+        "expected revoke hint in:\n{stdout}"
+    );
+    assert!(!stdout.contains(&format!("phone {TEST_PEER_B}")), "peer B has no streak:\n{stdout}");
 }
 
 // ---------------------------------------------------------------------------

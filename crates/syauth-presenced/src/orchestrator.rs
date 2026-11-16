@@ -483,6 +483,8 @@ struct PeerLiveness {
     /// "connect" event — see SPEC §3 scope item #24 + the journey
     /// doc).
     last_connect_at: Option<SystemTime>,
+    /// `bad-signature` outcomes since the last verified signature.
+    bad_signature_streak: u32,
 }
 
 /// Snapshot of a peer's shared state captured by
@@ -845,6 +847,7 @@ impl Orchestrator {
         let outcome = self
             .run_challenge(peer_id, nonce, deadline, &peer_state, t_start_ms, &mut cancelled)
             .await;
+        record_signature_result(&peer_state.liveness, &outcome).await;
         drop(permit);
         outcome
     }
@@ -1102,6 +1105,7 @@ impl Orchestrator {
                 last_connect_ms_ago: ms_since(now, liveness.last_connect_at),
                 current_session_uuid: Uuid::from_bytes(uuid_bytes),
                 in_flight_challenges: in_flight,
+                bad_signature_streak: liveness.bad_signature_streak,
             });
         }
         rows
@@ -1124,6 +1128,18 @@ async fn stamp_liveness(slot: &Arc<TokioMutex<PeerLiveness>>, now: SystemTime) {
     let mut guard = slot.lock().await;
     guard.last_challenge_at = Some(now);
     guard.last_connect_at = Some(now);
+}
+
+/// Count consecutive `bad-signature` outcomes; a verified signature
+/// resets the streak. Other outcomes (timeouts, cancellations) say
+/// nothing about the phone's key and leave it unchanged.
+async fn record_signature_result(slot: &Arc<TokioMutex<PeerLiveness>>, outcome: &ChallengeOutcome) {
+    let mut guard = slot.lock().await;
+    match outcome {
+        ChallengeOutcome::BadSignature => guard.bad_signature_streak = guard.bad_signature_streak.saturating_add(1),
+        ChallengeOutcome::Ok { .. } => guard.bad_signature_streak = 0,
+        _ => {}
+    }
 }
 
 /// Compute `now - then` in whole milliseconds. `None` if `then` is

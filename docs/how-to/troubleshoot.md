@@ -68,6 +68,22 @@ The current response budget is eight seconds. Approve a request you initiated wh
 
 `bad-signature` or `replay` cannot grant access through syauth. A phone-side Cancel currently sends 64 zero bytes, which the daemon classifies as `bad-signature`. The caller's PAM policy determines whether another module can authenticate afterward; consult [the result table](../reference/protocol.md#results-returned-to-pam).
 
+## The phone's key changed
+
+The phone signs approvals with a key in Android Keystore. Keystore keys are not part of app backups. Restoring the app's data from a backup brings back the pairing but not the key, and changing the phone's biometrics can invalidate the key. Every approval then fails with `bad-signature`.
+
+After three `bad-signature` results in a row with no verified approval in between, `syauth status` and `syauth doctor` print a warning naming the phone, and the KDE lockscreen shows "Phone key changed". The app's home screen also says that the key is gone. Declining three requests in a row on the phone triggers the same warning, because a Cancel also arrives as `bad-signature`.
+
+To recover, revoke the old bond and pair again:
+
+```sh
+syauth list
+syauth revoke --id <peer_id> --reason "phone key lost"
+syauth pair
+```
+
+On the phone, tap **Re-pair**. Copying key material between phones is not supported.
+
 ## Undo a PAM installation
 
 From the administrator session you retained:

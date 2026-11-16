@@ -42,7 +42,7 @@ use std::{
 use clap::Parser;
 use serde::Serialize;
 use syauth_core::BondStore;
-use syauth_presenced::{Request, Response, read_frame_blocking, write_frame_blocking};
+use syauth_presenced::{PeerStatus, Request, Response, read_frame_blocking, write_frame_blocking};
 use thiserror::Error;
 
 // =============================================================================
@@ -214,6 +214,17 @@ pub enum DaemonState {
     },
 }
 
+/// A bonded phone whose signing key no longer matches its bond.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PhoneKeyChanged {
+    /// Bond identifier.
+    pub peer_id: String,
+    /// `bad-signature` outcomes since the last verified signature.
+    pub bad_signature_streak: u32,
+    /// Operator hint: revoke and pair again.
+    pub hint: String,
+}
+
 /// Bonds-file probe outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BondsReport {
@@ -281,6 +292,9 @@ pub struct DoctorReport {
     pub last_log_tail: Vec<String>,
     /// XDG_RUNTIME_DIR env probe.
     pub xdg_runtime_dir: XdgRuntimeDirReport,
+    /// Bonded phones whose recent approvals kept failing signature
+    /// verification; see `PeerStatus::key_changed`.
+    pub phone_key_changed: Vec<PhoneKeyChanged>,
     /// Summary token: `"ok" | "warn" | "fail"`.
     pub summary: String,
 }
@@ -319,13 +333,25 @@ pub fn run_doctor(opts: &DoctorOpts) -> Result<(), DoctorError> {
 pub fn build_report(opts: &DoctorOpts) -> DoctorReport {
     let xdg = probe_xdg_runtime_dir();
     let daemon_socket = opts.socket.clone().unwrap_or_else(|| default_socket_path(&xdg.value));
-    let daemon = if opts.skip_daemon {
-        DaemonState::Down {
-            reason: "skipped".to_owned(),
-        }
+    let (daemon, peers) = if opts.skip_daemon {
+        (
+            DaemonState::Down {
+                reason: "skipped".to_owned(),
+            },
+            Vec::new(),
+        )
     } else {
         probe_daemon(&daemon_socket)
     };
+    let phone_key_changed: Vec<PhoneKeyChanged> = peers
+        .iter()
+        .filter(|p| p.key_changed())
+        .map(|p| PhoneKeyChanged {
+            peer_id: p.peer_id.clone(),
+            bad_signature_streak: p.bad_signature_streak,
+            hint: p.key_changed_hint(),
+        })
+        .collect();
     let bonds_file = probe_bonds(&opts.bonds_file);
     let keys = probe_keys(&opts.keys_dir);
     let bluez_adapter = if opts.skip_bluez {
@@ -339,7 +365,10 @@ pub fn build_report(opts: &DoctorOpts) -> DoctorReport {
         probe_systemctl()
     };
     let last_log_tail = probe_audit_log_tail(&opts.audit_log);
-    let summary = compute_summary(&daemon, &bonds_file, &keys, &xdg);
+    let mut summary = compute_summary(&daemon, &bonds_file, &keys, &xdg);
+    if summary == SUMMARY_OK && !phone_key_changed.is_empty() {
+        summary = SUMMARY_WARN.to_owned();
+    }
     DoctorReport {
         daemon_socket,
         daemon,
@@ -349,6 +378,7 @@ pub fn build_report(opts: &DoctorOpts) -> DoctorReport {
         systemctl,
         last_log_tail,
         xdg_runtime_dir: xdg,
+        phone_key_changed,
         summary,
     }
 }
@@ -398,8 +428,15 @@ fn default_socket_path(xdg_runtime_dir: &Path) -> PathBuf {
 /// Probe the daemon by connecting to `socket` and exchanging one
 /// `Request::Status` / `Response::Status` pair. Every failure path
 /// collapses into a `DaemonState::Down { reason }` so the doctor
-/// itself never returns an error.
-fn probe_daemon(socket: &Path) -> DaemonState {
+/// itself never returns an error. Also returns the daemon's peer rows
+/// (empty unless the daemon is up).
+fn probe_daemon(socket: &Path) -> (DaemonState, Vec<PeerStatus>) {
+    let mut peers = Vec::new();
+    let state = probe_daemon_into(socket, &mut peers);
+    (state, peers)
+}
+
+fn probe_daemon_into(socket: &Path, peers_out: &mut Vec<PeerStatus>) -> DaemonState {
     if !socket.exists() {
         return DaemonState::Down {
             reason: "socket-missing".to_owned(),
@@ -429,7 +466,10 @@ fn probe_daemon(socket: &Path) -> DaemonState {
         };
     }
     match read_frame_blocking::<_, Response>(&mut stream) {
-        Ok(Response::Status { .. }) => DaemonState::Up,
+        Ok(Response::Status { peers, .. }) => {
+            *peers_out = peers;
+            DaemonState::Up
+        }
         Ok(other) => DaemonState::Down {
             reason: format!("unexpected-response: {}", response_kind(&other)),
         },
@@ -681,6 +721,9 @@ pub fn write_keyvalue(writer: &mut dyn Write, report: &DoctorReport) -> Result<(
         writeln!(writer, "last_log_tail_{i}={line}")?;
     }
     write_xdg_runtime_dir(writer, &report.xdg_runtime_dir)?;
+    for peer in &report.phone_key_changed {
+        writeln!(writer, "phone_key_changed_{}={}", peer.peer_id, peer.hint)?;
+    }
     writeln!(writer, "doctor={}", report.summary)?;
     Ok(())
 }
@@ -886,6 +929,7 @@ mod tests {
                 set: true,
                 value: PathBuf::from("/run/user/1000"),
             },
+            phone_key_changed: vec![],
             summary: SUMMARY_FAIL.to_owned(),
         };
         let mut buf = Vec::new();
