@@ -132,6 +132,7 @@ private fun newViewModel(
     bondPersister: FakeBondPersister = FakeBondPersister(),
     bondRemover: FakeBondRemover = FakeBondRemover(),
     associator: AlwaysSuccessAssociator = AlwaysSuccessAssociator(),
+    locationEnabled: Boolean = true,
 ): Quad {
     val vm = PairingViewModel(
         backend = backend,
@@ -144,6 +145,7 @@ private fun newViewModel(
         // visible to the assertions below happen synchronously — the
         // S-016 test contract pre-dates S-018's suspend hop.
         associateDispatcher = Dispatchers.Unconfined,
+        isLocationEnabled = { locationEnabled },
     )
     return Quad(vm, backend, oobCalculator, bondPersister, bondRemover, associator)
 }
@@ -163,6 +165,37 @@ private val TEST_PEER: PeerHandle = PeerHandle(id = "AA:BB:CC:DD:EE:FF", name = 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PairingViewModelTest {
+
+    @Test
+    fun start_scan_with_location_off_explains_instead_of_opening_the_picker() {
+        val q = newViewModel(locationEnabled = false)
+
+        q.vm.onStartScanTapped()
+
+        assertEquals(PairingState.LocationOff, q.vm.state.value)
+        assertEquals("the picker must not open while Location is off", 0, q.backend.startScanCount)
+    }
+
+    @Test
+    fun continue_from_location_off_opens_the_picker() {
+        val q = newViewModel(locationEnabled = false)
+        q.vm.onStartScanTapped()
+
+        q.vm.onContinueWithoutLocationTapped()
+
+        assertEquals(PairingState.Scanning, q.vm.state.value)
+        assertEquals(1, q.backend.startScanCount)
+    }
+
+    @Test
+    fun cancel_from_location_off_returns_to_idle() {
+        val q = newViewModel(locationEnabled = false)
+        q.vm.onStartScanTapped()
+
+        q.vm.onCancelTapped()
+
+        assertEquals(PairingState.Idle, q.vm.state.value)
+    }
 
     @Test
     fun clearing_the_view_model_cleans_up_the_backend() {

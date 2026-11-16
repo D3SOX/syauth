@@ -676,6 +676,12 @@ private fun SyauthApp(
                 // Replace this back-stack entry so the old ViewModel is
                 // cleared (unregistering its receivers) and the retry
                 // gets a fresh one-shot backend.
+                onOpenLocationSettings = {
+                    activity.startActivity(
+                        Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS),
+                    )
+                },
+                onContinueWithoutLocation = viewModel::onContinueWithoutLocationTapped,
                 onRetry = {
                     navController.navigate(NavRoutes.PAIR) {
                         popUpTo(NavRoutes.PAIR) { inclusive = true }
@@ -1095,6 +1101,10 @@ private object PairingViewModelFactoryHolder {
                     ),
                     bondRemover = ReflectionBondRemover(adapter = adapter),
                     companionAssociator = associator,
+                    isLocationEnabled = {
+                        val lm = context.getSystemService(android.location.LocationManager::class.java)
+                        lm == null || androidx.core.location.LocationManagerCompat.isLocationEnabled(lm)
+                    },
                 )
                 // DEV-001 re-march: backend → ViewModel callback edge. The
                 // bond-state receiver inside `backend` resolves a

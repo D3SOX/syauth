@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.dp
  */
 object PairingTestTags {
     const val IDLE_CTA: String = "pair.idle.cta"
+    const val LOCATION_OFF_TEXT: String = "pair.location.text"
+    const val LOCATION_OFF_SETTINGS: String = "pair.location.settings"
+    const val LOCATION_OFF_CONTINUE: String = "pair.location.continue"
     const val SCANNING_PROGRESS: String = "pair.scanning.progress"
     const val SCANNING_CANCEL: String = "pair.scanning.cancel"
     const val LESC_CODE: String = "pair.lesc.code"
@@ -59,6 +62,11 @@ object PairingTestTags {
 object PairingStrings {
     const val IDLE_CTA: String = "Pair with computer"
     const val CANCEL: String = "Cancel"
+    const val LOCATION_OFF_TEXT: String =
+        "Turn on Location to pair. Android only finds the computer while Location is on. " +
+            "You can turn it off again after pairing; unlocking works without it."
+    const val LOCATION_OFF_SETTINGS: String = "Open Location settings"
+    const val LOCATION_OFF_CONTINUE: String = "Continue"
     const val OOB_QUESTION: String = "These match the computer?"
     const val OOB_YES: String = "Yes"
     const val OOB_NO: String = "No"
@@ -79,6 +87,8 @@ object PairingStrings {
  * @param onOobNo invoked from OobConfirming.
  * @param onDone invoked from Bonded / Failed — pops the route back to home.
  * @param onRetry invoked from Failed — starts a fresh pair attempt.
+ * @param onOpenLocationSettings invoked from LocationOff.
+ * @param onContinueWithoutLocation invoked from LocationOff.
  */
 @Composable
 fun PairingScreen(
@@ -89,6 +99,8 @@ fun PairingScreen(
     onOobNo: () -> Unit,
     onDone: () -> Unit,
     onRetry: () -> Unit = {},
+    onOpenLocationSettings: () -> Unit = {},
+    onContinueWithoutLocation: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -99,6 +111,10 @@ fun PairingScreen(
     ) {
         when (state) {
             is PairingState.Idle -> IdleContent(onStartScan = onStartScan)
+            is PairingState.LocationOff -> LocationOffContent(
+                onOpenSettings = onOpenLocationSettings,
+                onContinue = onContinueWithoutLocation,
+            )
             is PairingState.Scanning -> ScanningContent(onCancel = onCancel)
             is PairingState.LescNegotiating -> LescContent(
                 code = state.code,
@@ -124,6 +140,29 @@ private fun IdleContent(onStartScan: () -> Unit) {
             .semantics { testTag = PairingTestTags.IDLE_CTA },
     ) {
         Text(text = PairingStrings.IDLE_CTA)
+    }
+}
+
+@Composable
+private fun LocationOffContent(onOpenSettings: () -> Unit, onContinue: () -> Unit) {
+    Text(
+        text = PairingStrings.LOCATION_OFF_TEXT,
+        modifier = Modifier.semantics { testTag = PairingTestTags.LOCATION_OFF_TEXT },
+    )
+    Spacer(modifier = Modifier.height(24.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedButton(
+            onClick = onContinue,
+            modifier = Modifier.semantics { testTag = PairingTestTags.LOCATION_OFF_CONTINUE },
+        ) {
+            Text(text = PairingStrings.LOCATION_OFF_CONTINUE)
+        }
+        Button(
+            onClick = onOpenSettings,
+            modifier = Modifier.semantics { testTag = PairingTestTags.LOCATION_OFF_SETTINGS },
+        ) {
+            Text(text = PairingStrings.LOCATION_OFF_SETTINGS)
+        }
     }
 }
 
