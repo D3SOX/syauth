@@ -121,9 +121,10 @@ syauth status --json
 Look for `Bluetooth session lost; restarting peripheral`, followed by
 `opening Bluetooth peripheral` with the current adapter name. The peer's
 `connected` field becomes `true` once the phone subscribes again. Radio discovery
-can take longer than the service's restart delay. If the CLI reports the old
-adapter as missing, pass the current name, for example `syauth status --adapter
-hci1 --json`.
+can take longer than the service's restart delay. `syauth pair` and `syauth
+status` also use the default adapter unless you pass `--adapter`. If an explicit
+`--adapter` names the removed controller, drop it or pass the current name, for
+example `syauth status --adapter hci1 --json`.
 
 On 2026-10-16, the laptop had resumed with only `hci1` present. The old daemon
 was still running against the removed `hci0` and had failed every advertising

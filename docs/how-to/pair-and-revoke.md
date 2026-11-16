@@ -9,8 +9,10 @@ You need the [installed daemon and companion app](install.md), Bluetooth enabled
 1. Start the desktop pairing window:
 
     ```sh
-    syauth pair --adapter hci0
+    syauth pair
     ```
+
+    This uses BlueZ's default adapter. To choose one of several controllers, pass its name, for example `--adapter hci1`.
 
 2. On Android, choose **Pair with computer** and select the intended desktop in the system device picker.
 3. Compare the **six-digit Bluetooth code** on both devices. Confirm on both. In terminal mode, type `y` and press Enter at the desktop prompt. If the codes differ, cancel.

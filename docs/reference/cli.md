@@ -6,11 +6,13 @@ The desktop provides `syauth` for administration and `syauth-presenced` for the 
 
 | Command | Purpose | Useful options |
 | --- | --- | --- |
-| `syauth pair` | Start numeric-comparison and application-code pairing | `--adapter hci0`, `--waybar`, `--force`, `--peer <name-substring>`, `--bond-dir <path>` |
+| `syauth pair` | Start numeric-comparison and application-code pairing | `--adapter <id>`, `--waybar`, `--force`, `--peer <name-substring>`, `--bond-dir <path>` |
 | `syauth list` | Print bond records as TSV, including revoked records | `--bond-dir <path>` |
 | `syauth revoke --id <peer_id>` | Mark a record revoked, retaining its history | `--reason <text>`, `--bond-dir <path>` |
-| `syauth status` | Inspect desktop state and query the daemon | `--json`, `--watch`, `--socket <path>`, `--bond-dir <path>`, `--adapter hci0` |
+| `syauth status` | Inspect desktop state and query the daemon | `--json`, `--watch`, `--socket <path>`, `--bond-dir <path>`, `--adapter <id>` |
 | `syauth doctor` | Probe daemon, storage, permissions, BlueZ, and unit state | `--json`, `--socket <path>`, `--bonds-file <path>`, `--keys-dir <path>`, `--audit-log <path>` |
+
+Without `--adapter`, `pair` and `status` use BlueZ's default adapter. That is `hci0` if it exists, otherwise the first adapter in name order. This matches `syauth-presenced` and follows a controller the kernel renamed, for example from `hci0` to `hci1`. Pass `--adapter` only to choose between several controllers. If the named adapter does not exist, `pair` fails and lists the adapters BlueZ reports.
 
 `pair --force` replaces the application's existing peer record; it does not reset the Bluetooth system bond. `pair --yes` skips interactive confirmation and is intended for controlled test rigs. `--waybar` and `--yes` are mutually exclusive.
 

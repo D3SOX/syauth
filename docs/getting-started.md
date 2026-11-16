@@ -307,7 +307,8 @@ reopening the phone app or pairing again.
 
 Also check recovery after laptop suspend. The controller may return as `hci1`
 instead of `hci0`; the daemon should restart through its systemd user service and
-select the available adapter. See [laptop suspend recovery](bluetooth.md#recovery-after-laptop-suspend)
+select the available adapter. `syauth pair` and `syauth status` pick the same
+adapter when you don't pass `--adapter`. See [laptop suspend recovery](bluetooth.md#recovery-after-laptop-suspend)
 for the log messages and regression tests.
 
 The client retries every 15 seconds until notification setup succeeds, including
