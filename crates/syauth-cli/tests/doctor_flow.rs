@@ -76,6 +76,7 @@ impl FakeDaemon {
                 if let Ok(req) = read_frame_blocking::<_, Request>(&mut stream) {
                     if matches!(req, Request::Status) {
                         let resp = Response::Status {
+                            transport_ready: Some(true),
                             peers,
                             started_at: SystemTime::now(),
                         };

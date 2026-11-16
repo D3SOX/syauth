@@ -4,11 +4,13 @@
 
 Approve Linux authentication on your Android phone with a fresh strong biometric. syauth connects a Linux PAM module, a desktop Bluetooth daemon, and an Android companion that signs each request through Android Keystore.
 
-This is the [D3SOX fork](https://d3sox.me/syauth/fork/) of [dmytrogajewski/syauth](https://github.com/dmytrogajewski/syauth). It adds an Arch Linux/KDE desktop installer, empty-password KDE unlock, a combined sudo password/phone prompt, live lockscreen status, and connection recovery fixes. The fork publishes its own releases.
+This is the [D3SOX fork](https://d3sox.me/syauth/fork/) of [Mewplane/syauth](https://github.com/Mewplane/syauth). It adds an Arch Linux/KDE desktop installer, empty-password KDE unlock, a combined sudo password/phone prompt, live lockscreen status, and connection recovery fixes. The fork publishes its own releases.
 
 [Documentation](https://d3sox.me/syauth/) · [Fork changes](https://d3sox.me/syauth/fork/) · [Downloads](https://github.com/D3SOX/syauth/releases/latest) · [How it works](https://d3sox.me/syauth/explanation/mechanics/) · [Security boundaries](https://d3sox.me/syauth/explanation/security/)
 
 ## Install
+
+For Nix or NixOS, use the [Nix setup below](#nix-and-nixos).
 
 On a supported Linux desktop:
 
@@ -30,6 +32,21 @@ sh install-syauth.sh
 Release downloads include DEB, RPM, Arch Linux packages, and manual Linux archives for x86_64 and ARM64, plus a signed [Android APK](https://github.com/D3SOX/syauth/releases/download/v0.1.1/syauth-0.1.1-android.apk), source archive, signing certificate, and build metadata. GitHub shows each asset's SHA-256 digest; the installer verifies against it. See [installation and verification](https://d3sox.me/syauth/how-to/install/) for direct package commands and version-pinned downloads.
 
 Use Debian 12+, Ubuntu 24.04+, a current Fedora/openSUSE/Arch installation, or a compatible derivative, with glibc 2.36+, PAM, systemd user services, BlueZ, and a BLE adapter capable of advertising. The phone needs Android 13+ with a supported Ed25519 Keystore implementation and an enrolled strong biometric. The APK can install on older Android versions, but that does not establish signing-key support.
+
+### Nix and NixOS
+
+The flake supports `x86_64-linux` and `aarch64-linux`. With Nix and flakes enabled, install into your user profile without cloning the repository:
+
+```sh
+nix profile install github:D3SOX/syauth
+syauth --version
+```
+
+This installs the CLI, `syauth-presenced` daemon, and PAM module; storage, service activation, and PAM still need configuration. See [profile installation and setup](docs/how-to/install.md#install-with-nix) for details and update/removal commands.
+
+For NixOS, add `github:D3SOX/syauth` as a flake input and import `syauth.nixosModules.default`. Enable `services.syauth`, set `desktopUser` to your existing desktop account, and select the PAM services through `pam.services` (empty by default). The module manages the package, private bond-store directory, and daemon in that account's systemd user session. Run pairing as that account, without `sudo`.
+
+Follow the [installation guide](docs/how-to/install.md#configure-nixos) for the complete flake configuration and activation commands. The [NixOS module reference](docs/reference/nix-modules.md) documents all options and PAM policy.
 
 ## Use
 
@@ -65,6 +82,7 @@ On restart the daemon can disconnect and reconnect one explicitly configured pho
 
 - [First unlock tutorial](https://d3sox.me/syauth/tutorials/first-unlock/)
 - [Install](https://d3sox.me/syauth/how-to/install/), [pair and revoke](https://d3sox.me/syauth/how-to/pair-and-revoke/), [troubleshoot](https://d3sox.me/syauth/how-to/troubleshoot/)
+- [Nix and NixOS setup](docs/how-to/install.md#install-with-nix), [NixOS module options](docs/reference/nix-modules.md)
 - [CLI](https://d3sox.me/syauth/reference/cli/), [configuration](https://d3sox.me/syauth/reference/configuration/), [protocol](https://d3sox.me/syauth/reference/protocol/)
 - [Illustrated mechanics](https://d3sox.me/syauth/explanation/mechanics/) with animated pairing, discovery, and unlock
 - [Release builds and signing](https://d3sox.me/syauth/contributing/releases/)
@@ -79,6 +97,8 @@ sh scripts/install.sh --source
 ```
 
 ## Development and contributing
+
+For a pinned Rust development environment, run `nix develop .`. Entering the shell also installs the repository's pre-commit hooks. Build from a checkout with `nix build .` and try the CLI with `nix run . -- --version`. Run `nix flake check .` to build the package, check the generated NixOS configuration, and boot the installed-PAM integration VM (requires writable `/dev/kvm`); see [building with Nix](docs/how-to/install.md#with-nix) for details.
 
 The Rust workspace is under `crates/`; the Android app is under `syauth-android/`. Build from source with a toolchain compatible with the committed `Cargo.lock` and development packages for D-Bus, PAM, and Bluetooth:
 

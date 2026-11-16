@@ -34,6 +34,23 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  nix:
+    name: nix (package + module + VM)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          enable_kvm: true
+          extra_nix_config: |
+            system-features = nixos-test big-parallel kvm
+            max-jobs = 2
+            cores = 2
+      - name: Check Nix formatting
+        run: nix --accept-flake-config fmt -- --check flake.nix nix/*.nix nix/modules/*.nix nix/tests/*.nix
+      - name: Build package, evaluate module, and boot the integration VM
+        run: nix --accept-flake-config flake check --no-write-lock-file --print-build-logs
+
   lint:
     name: lint (clippy + fmt + deny + scope-discipline)
     runs-on: ubuntu-latest
@@ -45,7 +62,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libpam0g-dev libbluetooth-dev \
+            dbus-daemon libdbus-1-dev libpam0g-dev libbluetooth-dev \
             pkg-config
 
       - name: Install Rust (stable)
@@ -75,7 +92,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libpam0g-dev libbluetooth-dev \
+            dbus-daemon libdbus-1-dev libpam0g-dev libbluetooth-dev \
             pkg-config
 
       - name: Install Rust (stable)
@@ -86,6 +103,14 @@ jobs:
 
       - name: make test
         run: make test
+
+      - name: Check root PAM audit ownership in a disposable directory
+        run: |
+          for test_binary in target/debug/deps/pam_audit_ownership-*; do
+            if test -x "$test_binary"; then
+              sudo "$test_binary" --ignored --exact pam_first_log_is_owned_by_store_account
+            fi
+          done
 
       - name: Test pacman update checker
         run: python3 -m unittest discover -s tests -p test_pam_update_check.py
@@ -106,7 +131,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libpam0g-dev libbluetooth-dev \
+            dbus-daemon libdbus-1-dev libpam0g-dev libbluetooth-dev \
             pkg-config
 
       - name: Install Rust (stable)

@@ -1,4 +1,4 @@
-# Fedora RPM spec for syauth v0.1.0 (roadmap item S-021).
+# Fedora RPM spec for syauth v0.3.0 (roadmap item S-021).
 #
 # This spec ships the Linux desktop side of syauth — the PAM cdylib
 # under %%{_libdir}/security/pam_syauth.so (mode 0644 per SPEC §6 +
@@ -12,8 +12,8 @@
 # phone. Built under `mock -r fedora-%%{fedora}-x86_64 deploy/fedora/syauth.spec`
 # or via `make rpm` (which gates on `which mock`).
 
-%global package_version 0.1.1
-%global rpm_release 4
+%global package_version 0.3.0
+%global rpm_release 5
 %global debug_package %{nil}
 %global min_fedora 39
 
@@ -23,7 +23,7 @@ Release:        %{rpm_release}%{?dist}
 Summary:        Phone-as-key PAM authenticator for Linux
 
 License:        MIT
-URL:            https://github.com/sy/syauth
+URL:            https://github.com/D3SOX/syauth
 Source0:        %{name}-%{version}.tar.gz
 
 # Cross-reference: deploy/version.env, /Cargo.toml [workspace.package].
@@ -43,6 +43,7 @@ BuildRequires:  rust >= 1.85
 BuildRequires:  pam-devel
 BuildRequires:  pkgconf-pkg-config
 BuildRequires:  bluez-libs-devel
+BuildRequires:  dbus-daemon
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  openssl-devel
 BuildRequires:  gzip
@@ -163,6 +164,16 @@ fi
 %{_mandir}/man8/syauth.8.gz
 
 %changelog
+* Sun Nov 08 2026 syauth contributors <maintainers@example.invalid> - 0.3.0-5
+- Add Nix/NixOS installation with tested PAM socket configuration
+- Preserve daemon access to PAM-first audit logs
+
+* Sat Nov 07 2026 syauth contributors <maintainers@example.invalid> - 0.2.0-5
+- Recover Bluetooth transport after controller loss and report transport health.
+
+* Sat Oct 31 2026 syauth contributors <maintainers@example.invalid> - 0.1.0-5
+- Select the available BlueZ default adapter when starting the presence daemon.
+
 * Tue Oct 20 2026 syauth contributors <maintainers@example.invalid> - 0.1.1-4
 - Publish fork releases from D3SOX/syauth with the fork's Android signing key.
 - Add the Arch Linux/KDE desktop installer, empty-password KDE unlock, and the

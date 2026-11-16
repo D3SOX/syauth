@@ -210,6 +210,11 @@ impl From<TransportError> for PeripheralError {
 /// method.
 #[async_trait]
 pub trait Peripheral: Send + Sync {
+    /// Check controller and advertising health independently of phone presence.
+    async fn check_health(&self) -> Result<(), PeripheralError> {
+        Ok(())
+    }
+
     /// Whether the peer has a live subscription able to receive challenges.
     async fn is_connected(&self, peer_id: &str) -> bool;
     /// Register a bonded peer's challenge + response characteristics
@@ -636,6 +641,29 @@ impl Peripheral for PersistentPeripheral {
         let Some(peer) = peers.get(peer_id) else { return false };
         peer.notifier_slot.is_subscribed().await
     }
+
+    async fn check_health(&self) -> Result<(), PeripheralError> {
+        // Adapter removal is latched by `wait_for_failure`. Probe power and,
+        // when an advertisement is registered, that BlueZ still runs it. With
+        // no bonded peers the slot is empty by design.
+        let advertisement = self.adv_slot.lock().await;
+        let healthy = async {
+            Ok::<_, bluer::Error>(
+                self.adapter.is_powered().await? && (advertisement.is_none() || self.adapter.active_advertising_instances().await? > 0),
+            )
+        }
+        .await
+        .map_err(|err| PeripheralError::Backend {
+            reason: format!("controller health: {err}"),
+        })?;
+        if !healthy {
+            return Err(PeripheralError::Backend {
+                reason: "controller powered off or advertisement unavailable".into(),
+            });
+        }
+        Ok(())
+    }
+
     async fn add_peer(&self, peer_id: &str, bond_key: &BondKey) -> Result<(), PeripheralError> {
         let peers = self.peers.lock().await;
         if peers.contains_key(peer_id) {
@@ -773,6 +801,7 @@ async fn wait_for_peer_response(
 #[cfg(any(test, feature = "test-fake"))]
 #[derive(Default)]
 struct FakeState {
+    transport_failed: bool,
     /// Peers in insertion order so tests can assert on the order
     /// after a `remove_peer` in the middle of the sequence.
     peers_in_order: Vec<String>,
@@ -808,6 +837,11 @@ pub struct FakePeripheral {
 
 #[cfg(any(test, feature = "test-fake"))]
 impl FakePeripheral {
+    /// Simulate controller loss without changing the bonded peer set.
+    pub fn set_transport_failed(&self, failed: bool) {
+        self.lock_state().transport_failed = failed;
+    }
+
     /// Simulate subscription and disconnection without transmitting a challenge.
     pub fn set_connected(&self, peer_id: &str, connected: bool) {
         let mut state = self.lock_state();
@@ -895,6 +929,15 @@ impl Default for FakePeripheral {
 #[cfg(any(test, feature = "test-fake"))]
 #[async_trait]
 impl Peripheral for FakePeripheral {
+    async fn check_health(&self) -> Result<(), PeripheralError> {
+        if self.lock_state().transport_failed {
+            return Err(PeripheralError::Backend {
+                reason: "controller removed".into(),
+            });
+        }
+        Ok(())
+    }
+
     async fn is_connected(&self, peer_id: &str) -> bool {
         let state = self.lock_state();
         state.peer_keys.contains_key(peer_id) && state.connected.contains(peer_id)
@@ -925,6 +968,11 @@ impl Peripheral for FakePeripheral {
 
     async fn set_session_uuids(&self, uuids: std::collections::HashSet<Uuid>) -> Result<(), PeripheralError> {
         let mut state = self.lock_state();
+        if state.transport_failed {
+            return Err(PeripheralError::Backend {
+                reason: "controller removed".into(),
+            });
+        }
         state.session_uuid_calls.push(uuids);
         Ok(())
     }
@@ -1149,5 +1197,14 @@ mod tests {
             PeripheralError::PeerAlreadyAdded { peer_id } => assert_eq!(peer_id, "a"),
             other => panic!("expected PeerAlreadyAdded, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live BlueZ; temporarily registers a GATT application"]
+    async fn persistent_peripheral_opens_default_bluez_adapter() {
+        let session = bluer::Session::new().await.expect("system bus");
+        let expected = session.default_adapter().await.expect("available adapter");
+        let peripheral = PersistentPeripheral::new_default().await.expect("open default adapter");
+        assert_eq!(peripheral.adapter.name(), expected.name());
     }
 }

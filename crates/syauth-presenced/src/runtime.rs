@@ -225,7 +225,7 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
         socket_path: config.socket.clone(),
         expected_uid: config.expected_uid,
         reload_tx: reload_tx.clone(),
-        orchestrator: orch_handle,
+        orchestrator: orch_handle.clone(),
         test_fixed_nonce: config.test_fixed_nonce,
         started_at: Some(std::time::SystemTime::now()),
     };
@@ -244,12 +244,19 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
             tracing::warn!(error = %error, "Bluetooth session lost; restarting peripheral");
             Err(RunError::Peripheral(error))
         }
+        error = wait_for_transport_failure(orch_handle.as_ref()) => {
+            tracing::warn!(error = %error, "Bluetooth transport unhealthy; restarting peripheral");
+            Err(RunError::Peripheral(error))
+        }
     };
     tracing::info!(?reason, "draining daemon tasks");
     let _ = shutdown_tx.send(());
     let _ = orch_shutdown_tx.send(());
-    if let Some(handle) = orch_task {
-        let _ = handle.await;
+    if let Some(mut handle) = orch_task {
+        if tokio::time::timeout(TRANSPORT_HEALTH_INTERVAL, &mut handle).await.is_err() {
+            handle.abort();
+            let _ = handle.await;
+        }
     }
     if let Some(handle) = inotify_task {
         handle.abort();
@@ -271,6 +278,23 @@ pub async fn run(config: Config) -> Result<ShutdownReason, RunError> {
     drop(lock);
     tracing::info!("syauth-presenced stopped cleanly");
     reason
+}
+
+/// Cadence for detecting a lost controller independently of minute rotation.
+const TRANSPORT_HEALTH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Poll transport health. Without an orchestrator (invalid bond store) the
+/// daemon keeps serving the socket for diagnostics, so this never resolves.
+async fn wait_for_transport_failure(orchestrator: Option<&Arc<Orchestrator>>) -> PeripheralError {
+    let Some(orchestrator) = orchestrator else {
+        return std::future::pending().await;
+    };
+    loop {
+        tokio::time::sleep(TRANSPORT_HEALTH_INTERVAL).await;
+        if let Err(err) = orchestrator.check_transport().await {
+            return err;
+        }
+    }
 }
 
 async fn wait_for_reason(
@@ -487,4 +511,22 @@ fn load_bond_key(keys_dir: &Path, peer_id: &str) -> Result<[u8; BOND_KEY_BYTES],
 /// short-circuits in [`maybe_spawn_orchestrator`] read uniformly.
 fn warn_no_orchestrator(reason: &str) {
     tracing::warn!(reason, "orchestrator not started; daemon will serve socket only");
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn controller_absence_does_not_exhaust_systemd_restart_limit() {
+        let unit = include_str!("../dist/syauth-presenced.service");
+        assert!(unit.contains("StartLimitIntervalSec=0"));
+        assert!(unit.contains("Restart=on-failure"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn absent_orchestrator_keeps_the_diagnostic_socket_running() {
+        let wait = wait_for_transport_failure(None);
+        assert!(tokio::time::timeout(TRANSPORT_HEALTH_INTERVAL * 10, wait).await.is_err());
+    }
 }
