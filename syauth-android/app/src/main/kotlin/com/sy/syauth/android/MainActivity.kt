@@ -673,6 +673,14 @@ private fun SyauthApp(
                     onPairingFinished(state)
                     navController.popBackStack(NavRoutes.HOME, inclusive = false)
                 },
+                // Replace this back-stack entry so the old ViewModel is
+                // cleared (unregistering its receivers) and the retry
+                // gets a fresh one-shot backend.
+                onRetry = {
+                    navController.navigate(NavRoutes.PAIR) {
+                        popUpTo(NavRoutes.PAIR) { inclusive = true }
+                    }
+                },
             )
         }
         composable(NavRoutes.APPROVE) {

@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -51,6 +52,7 @@ object PairingTestTags {
     const val BONDED_DONE: String = "pair.bonded.done"
     const val FAILED_REASON: String = "pair.failed.reason"
     const val FAILED_BACK: String = "pair.failed.back"
+    const val FAILED_RETRY: String = "pair.failed.retry"
 }
 
 /** Static UI strings. Centralised so tests assert on the same constants. */
@@ -64,6 +66,7 @@ object PairingStrings {
     const val DONE: String = "Done"
     const val FAILED_PREFIX: String = "Pairing failed: "
     const val BACK: String = "Back"
+    const val RETRY: String = "Try again"
 }
 
 /**
@@ -75,6 +78,7 @@ object PairingStrings {
  * @param onOobYes invoked from OobConfirming.
  * @param onOobNo invoked from OobConfirming.
  * @param onDone invoked from Bonded / Failed — pops the route back to home.
+ * @param onRetry invoked from Failed — starts a fresh pair attempt.
  */
 @Composable
 fun PairingScreen(
@@ -84,6 +88,7 @@ fun PairingScreen(
     onOobYes: () -> Unit,
     onOobNo: () -> Unit,
     onDone: () -> Unit,
+    onRetry: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -105,7 +110,7 @@ fun PairingScreen(
                 onNo = onOobNo,
             )
             is PairingState.Bonded -> BondedContent(name = state.name, onDone = onDone)
-            is PairingState.Failed -> FailedContent(reason = state.reason, onBack = onDone)
+            is PairingState.Failed -> FailedContent(reason = state.reason, onBack = onDone, onRetry = onRetry)
         }
     }
 }
@@ -198,16 +203,24 @@ private fun BondedContent(name: String, onDone: () -> Unit) {
 }
 
 @Composable
-private fun FailedContent(reason: String, onBack: () -> Unit) {
+private fun FailedContent(reason: String, onBack: () -> Unit, onRetry: () -> Unit) {
     Text(
         text = PairingStrings.FAILED_PREFIX + reason,
         modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_REASON },
     )
     Spacer(modifier = Modifier.height(24.dp))
-    Button(
-        onClick = onBack,
-        modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_BACK },
-    ) {
-        Text(text = PairingStrings.BACK)
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_BACK },
+        ) {
+            Text(text = PairingStrings.BACK)
+        }
+        Button(
+            onClick = onRetry,
+            modifier = Modifier.semantics { testTag = PairingTestTags.FAILED_RETRY },
+        ) {
+            Text(text = PairingStrings.RETRY)
+        }
     }
 }

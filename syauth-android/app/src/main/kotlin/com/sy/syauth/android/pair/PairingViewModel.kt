@@ -283,6 +283,11 @@ class PairingViewModel(
         _state.value = PairingState.Failed(PairingReasons.OOB_MISMATCH)
     }
 
+    /** Unregister the backend's receivers so a later attempt starts clean. */
+    override fun onCleared() {
+        backend.cleanup()
+    }
+
     /**
      * Best-effort BT bond cleanup. Returns silently on any failure; the
      * BondPersister is intentionally NOT consulted here — see DoD #3 and
