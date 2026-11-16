@@ -167,6 +167,9 @@ fi
 * Sun Nov 08 2026 syauth contributors <maintainers@example.invalid> - 0.3.0-5
 - Add Nix/NixOS installation with tested PAM socket configuration
 - Preserve daemon access to PAM-first audit logs
+- Leave pairing to syauth pair; the daemon no longer accepts phones on its own
+- Report a phone whose signing key changed in status, doctor, and the lockscreen
+- Use BlueZ's default adapter in pair, status, and doctor
 
 * Sat Nov 07 2026 syauth contributors <maintainers@example.invalid> - 0.2.0-5
 - Recover Bluetooth transport after controller loss and report transport health.
