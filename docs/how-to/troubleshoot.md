@@ -50,6 +50,33 @@ Drop the option, or pass one of the listed names. `ls /sys/class/bluetooth` and 
 
 Android's companion-device picker finds the desktop only while Location is on. The scan starts, but returns nothing with Location off. Turn Location on, keep the desktop pairing window open, and tap **Pair with computer** again. The app warns about this before it opens the picker. You can turn Location off after pairing.
 
+## Re-pairing fails after removing the phone
+
+`bluetoothctl remove <phone>` can leave the phone's old identity resolving key (IRK) in BlueZ's storage. The controller then still resolves the phone's private address to its old identity, which `btmon` shows as `Resolved Public` with the old address. Every new pairing fails right after the phone accepts it, with `SMP_DHKEY_CHK_FAIL` in the phone's log.
+
+Remove the stale pairing on both sides:
+
+1. On the phone, open Bluetooth settings and forget the computer.
+2. On the computer, find the adapter address and the phone's identity address:
+
+    ```sh
+    bluetoothctl list
+    bluetoothctl devices
+    ```
+
+3. With BlueZ stopped, delete only that phone's stored pairing and cache entry, then start BlueZ again:
+
+    ```sh
+    sudo systemctl stop bluetooth
+    sudo rm -r /var/lib/bluetooth/<adapter-address>/<phone-address>
+    sudo rm -f /var/lib/bluetooth/<adapter-address>/cache/<phone-address>
+    sudo systemctl start bluetooth
+    ```
+
+4. Pair again with `syauth pair`.
+
+Leave the other entries under `/var/lib/bluetooth` alone. They hold the pairings of your other Bluetooth devices.
+
 ## Pairing fails while reading the host key
 
 If Android reports `host-pubkey read failed status=1`, check that it is running the current companion. The exchange reads the host key **before** sending the phone key; sending the phone key allows the desktop to replace the transient pair service. Reusing those handles afterward can fail. Both pairing and persistent connections explicitly request LE transport; enabling a Bluetooth audio profile is not required.

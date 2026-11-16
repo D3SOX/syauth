@@ -262,7 +262,9 @@ syauth pair --timeout-secs 300
 
 If pairing fails, inspect Bluetooth settings on both devices for stale bonds
 before retrying. Only remove the intended phone/computer pairing. Do not reset
-Bluetooth or remove unrelated devices.
+Bluetooth or remove unrelated devices. If pairing keeps failing right after the
+phone accepts it, BlueZ may still hold the phone's old key; see
+[re-pairing fails after removing the phone](how-to/troubleshoot.md#re-pairing-fails-after-removing-the-phone).
 
 Optionally configure the daemon to reconnect only the phone on restart. Use
 the phone identity address shown by `bluetoothctl devices Paired`, not an unrelated
