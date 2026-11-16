@@ -45,7 +45,7 @@ use syauth_presenced::{PeerStatus, Request, Response, read_frame_blocking, write
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::pair::{DEFAULT_ADAPTER_NAME, DEFAULT_BOND_DIR, bonds_path};
+use crate::pair::{DEFAULT_BOND_DIR, bonds_path};
 
 /// Poll cadence applied to `--watch`. Pinned per S-017 prompt
 /// ("polls every 1 s and redraws"). One second is short enough to
@@ -101,6 +101,10 @@ pub const ADVERTISING_STATE_V01: bool = false;
 /// Token printed when `last.log` is missing or empty.
 pub const LAST_UNLOCK_NO_ENTRIES: &str = "(no entries)";
 
+/// Name printed on the `adapter:` line when no `--adapter` was given and
+/// BlueZ has no adapter to default to.
+pub const NO_DEFAULT_ADAPTER_NAME: &str = "(none)";
+
 /// Outcome token printed when the last log line cannot be parsed into
 /// `<timestamp> <outcome> <peer-id>`. Surfaces the offending line
 /// verbatim so the operator can fix it without re-greppping.
@@ -109,9 +113,10 @@ pub const LAST_UNLOCK_UNPARSEABLE_PREFIX: &str = "(unparseable: ";
 /// CLI options for the `status` subcommand.
 #[derive(Debug, Parser, Clone)]
 pub struct StatusOpts {
-    /// BlueZ adapter id (e.g. `hci0`).
-    #[arg(long, default_value = DEFAULT_ADAPTER_NAME)]
-    pub adapter: String,
+    /// BlueZ adapter id (e.g. `hci1`). Defaults to BlueZ's default
+    /// adapter, which follows the controller when the kernel renames it.
+    #[arg(long)]
+    pub adapter: Option<String>,
 
     /// Directory holding the bonds file. Defaults to SPEC's
     /// `/var/lib/syauth/`. Tests inject a tempdir.
@@ -330,9 +335,10 @@ pub fn read_last_unlock(path: &std::path::Path) -> Result<LastUnlockView, Status
 /// lives in [`probe_adapter_state`]; the integration test injects a
 /// closure-shaped probe so it never touches the host's BlueZ.
 pub trait AdapterProbe: Send + Sync {
-    /// Return the adapter state for `adapter_id`. `Missing` is the
-    /// expected return on hosts without that adapter (NOT an error).
-    fn probe(&self, adapter_id: &str) -> AdapterState;
+    /// Return the resolved adapter id and its state for `adapter_id`, or
+    /// for BlueZ's default adapter when `None`. `Missing` is the expected
+    /// state on hosts without that adapter (NOT an error).
+    fn probe(&self, adapter_id: Option<&str>) -> (String, AdapterState);
 }
 
 /// Default production probe: opens a `bluer::Session` and asks BlueZ
@@ -343,34 +349,42 @@ pub struct BluerAdapterProbe;
 
 #[async_trait::async_trait]
 impl AsyncAdapterProbe for BluerAdapterProbe {
-    async fn probe_async(&self, adapter_id: &str) -> AdapterState {
-        bluer_probe(adapter_id).await.unwrap_or(AdapterState::Missing)
+    async fn probe_async(&self, adapter_id: Option<&str>) -> (String, AdapterState) {
+        bluer_probe(adapter_id)
+            .await
+            .unwrap_or_else(|()| (adapter_id.unwrap_or(NO_DEFAULT_ADAPTER_NAME).to_owned(), AdapterState::Missing))
     }
 }
 
 /// Async query of BlueZ. Any failure (BlueZ absent, dbus error, adapter
-/// not in the listed set) folds into `Missing` upstream.
-async fn bluer_probe(adapter_id: &str) -> Result<AdapterState, ()> {
+/// not in the listed set, no default adapter) folds into `Missing`
+/// upstream.
+async fn bluer_probe(adapter_id: Option<&str>) -> Result<(String, AdapterState), ()> {
     let session = bluer::Session::new().await.map_err(|_| ())?;
-    let names = session.adapter_names().await.map_err(|_| ())?;
-    if !names.iter().any(|n| n == adapter_id) {
-        return Ok(AdapterState::Missing);
-    }
-    let adapter = session.adapter(adapter_id).map_err(|_| ())?;
-    match adapter.is_powered().await {
-        Ok(true) => Ok(AdapterState::Powered),
-        Ok(false) => Ok(AdapterState::Down),
-        Err(_) => Ok(AdapterState::Missing),
-    }
+    let adapter = match adapter_id {
+        Some(name) => {
+            let names = session.adapter_names().await.map_err(|_| ())?;
+            if !names.iter().any(|n| n == name) {
+                return Err(());
+            }
+            session.adapter(name).map_err(|_| ())?
+        }
+        None => session.default_adapter().await.map_err(|_| ())?,
+    };
+    let state = match adapter.is_powered().await {
+        Ok(true) => AdapterState::Powered,
+        Ok(false) => AdapterState::Down,
+        Err(_) => AdapterState::Missing,
+    };
+    Ok((adapter.name().to_owned(), state))
 }
 
 /// Async sibling of [`AdapterProbe`] — used by the production async
 /// dispatcher to query BlueZ without spinning up a nested runtime.
 #[async_trait::async_trait]
 pub trait AsyncAdapterProbe: Send + Sync {
-    /// Return the adapter state for `adapter_id`. `Missing` is the
-    /// expected return on hosts without that adapter.
-    async fn probe_async(&self, adapter_id: &str) -> AdapterState;
+    /// Async form of [`AdapterProbe::probe`].
+    async fn probe_async(&self, adapter_id: Option<&str>) -> (String, AdapterState);
 }
 
 /// Snapshot of every field [`render_status_to`] needs. Built by
@@ -428,9 +442,10 @@ pub fn gather_status(opts: &StatusOpts, probe: &dyn AdapterProbe) -> Result<Stat
     let path = bonds_path(&opts.bond_dir);
     let store = BondStore::load(&path)?;
     let last_unlock = read_last_unlock(&effective_last_log_path(opts))?;
+    let (adapter, adapter_state) = probe.probe(opts.adapter.as_deref());
     Ok(StatusSnapshot {
-        adapter: opts.adapter.clone(),
-        adapter_state: probe.probe(&opts.adapter),
+        adapter,
+        adapter_state,
         advertising: ADVERTISING_STATE_V01,
         bonds_count: store.list().len(),
         last_unlock,
@@ -448,9 +463,9 @@ pub async fn gather_status_async(opts: &StatusOpts, probe: &dyn AsyncAdapterProb
     let path = bonds_path(&opts.bond_dir);
     let store = BondStore::load(&path)?;
     let last_unlock = read_last_unlock(&effective_last_log_path(opts))?;
-    let adapter_state = probe.probe_async(&opts.adapter).await;
+    let (adapter, adapter_state) = probe.probe_async(opts.adapter.as_deref()).await;
     Ok(StatusSnapshot {
-        adapter: opts.adapter.clone(),
+        adapter,
         adapter_state,
         advertising: ADVERTISING_STATE_V01,
         bonds_count: store.list().len(),
@@ -713,10 +728,13 @@ mod tests {
     const SAMPLE_TS: &str = "2026-05-15T12:00:00Z";
     const SAMPLE_PEER: &str = "0123456789abcdef0123456789abcdef";
 
+    /// Adapter `FixedProbe` reports as BlueZ's default.
+    const PROBE_DEFAULT_ADAPTER: &str = "hci1";
+
     struct FixedProbe(AdapterState);
     impl AdapterProbe for FixedProbe {
-        fn probe(&self, _adapter_id: &str) -> AdapterState {
-            self.0
+        fn probe(&self, adapter_id: Option<&str>) -> (String, AdapterState) {
+            (adapter_id.unwrap_or(PROBE_DEFAULT_ADAPTER).to_owned(), self.0)
         }
     }
 
@@ -848,7 +866,7 @@ mod tests {
         let td = TempDir::new().expect("tempdir");
         let bond_dir = td.path().to_path_buf();
         let opts = StatusOpts {
-            adapter: "test-adapter".to_owned(),
+            adapter: Some("test-adapter".to_owned()),
             bond_dir,
             last_log: None,
             socket: None,
@@ -865,9 +883,25 @@ mod tests {
     }
 
     #[test]
+    fn gather_status_without_adapter_reports_the_default_adapter() {
+        let td = TempDir::new().expect("tempdir");
+        let opts = StatusOpts {
+            adapter: None,
+            bond_dir: td.path().to_path_buf(),
+            last_log: None,
+            socket: None,
+            watch: false,
+            json: false,
+        };
+        let snap = gather_status(&opts, &FixedProbe(AdapterState::Powered)).expect("gather");
+        assert_eq!(snap.adapter, PROBE_DEFAULT_ADAPTER);
+        assert_eq!(snap.adapter_state, AdapterState::Powered);
+    }
+
+    #[test]
     fn effective_last_log_path_falls_back_to_bond_dir_default() {
         let opts = StatusOpts {
-            adapter: "hci0".to_owned(),
+            adapter: None,
             bond_dir: PathBuf::from("/tmp/foo"),
             last_log: None,
             socket: None,
@@ -883,7 +917,7 @@ mod tests {
     #[test]
     fn effective_last_log_path_honors_explicit_flag() {
         let opts = StatusOpts {
-            adapter: "hci0".to_owned(),
+            adapter: None,
             bond_dir: PathBuf::from("/tmp/foo"),
             last_log: Some(PathBuf::from("/tmp/elsewhere/last.log")),
             socket: None,
