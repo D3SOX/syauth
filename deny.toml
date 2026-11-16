@@ -39,6 +39,9 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant is required by secret-service 5; zbus 6 migration is unreleased" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names is required by secret-service 5; zbus 6 migration is unreleased" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is required by secret-service 5; zbus 6 migration is unreleased" },
+    # basic-toml only reads askama's template config inside the askama_derive
+    # proc-macro, pulled in by syauth-mobile's uniffi 0.29 build dependency.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml is build-time only via uniffi 0.29's askama; no maintained release exists" },
 ]
 
 # ---------------------------------------------------------------------------
