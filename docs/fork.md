@@ -1,6 +1,6 @@
 # Fork changes
 
-This site documents [D3SOX/syauth](https://github.com/D3SOX/syauth), a fork of [dmytrogajewski/syauth](https://github.com/dmytrogajewski/syauth). The fork merges upstream regularly and publishes its own releases. The changes below are not in upstream.
+This site documents [D3SOX/syauth](https://github.com/D3SOX/syauth), a fork of [Mewplane/syauth](https://github.com/Mewplane/syauth). The fork merges upstream regularly and publishes its own releases. The changes below are not in upstream.
 
 ## Arch Linux and KDE Plasma desktop
 

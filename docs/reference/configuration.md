@@ -2,6 +2,12 @@
 
 This page describes the active daemon and PAM configuration. It does not replace the design specification or change the service's authentication policy.
 
+The presence daemon selects BlueZ's available default Bluetooth adapter at
+startup. It does not assume the controller is named `hci0`; reinitialized
+controllers can appear as `hci1` or later. After controller removal, restarting
+the daemon selects the currently available adapter. An RPC status of `up` alone
+does not establish that the desktop is advertising or the phone is subscribed.
+
 ## Files and ownership
 
 | Path | Owner / use |
@@ -16,6 +22,12 @@ This page describes the active daemon and PAM configuration. It does not replace
 | Android app-private `syauth-bond.toml` | Host metadata, application bond material, and a Keystore alias |
 
 The intended default desktop store belongs to the desktop account running the daemon. Keep directories private (`0700`) and key files private (`0600`). The shared default path is not a separate store for each Linux account. Changing the daemon's storage flags alone does not change the PAM module's fixed bond directory.
+
+When PAM creates `last.log` before the daemon starts, it uses mode `0600` and
+the bond-store directory's owner and group. Existing records are preserved.
+For a log created by an older version with root ownership, have an administrator
+restore its ownership to the desktop account and its mode to `0600`; upgrading
+does not change ownership of existing files.
 
 Android's signing private key is represented by its Keystore alias. It is not a raw Ed25519 seed stored in that TOML file. See [storage boundaries](../explanation/security.md#implementation-and-design) for the difference between a Keystore signing key and the application's bond material.
 
