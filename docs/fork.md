@@ -21,6 +21,10 @@ This site documents [D3SOX/syauth](https://github.com/D3SOX/syauth), a fork of [
 
 See [Bluetooth transport and connection recovery](bluetooth.md).
 
+## Pairing
+
+- `syauth pair` is the only pairing path. Upstream's daemon also kept the adapter pairable and discoverable, registered a Bluetooth agent that accepted every numeric-comparison request, and saved a bond for any phone that wrote a key to its pair service. It also took the default agent away from `syauth pair`, so running both at once broke pairing. The fork's daemon does none of this. See [pair a phone](how-to/pair-and-revoke.md).
+
 ## Android companion
 
 - The fingerprint prompt opens automatically when a request arrives. Dismissing it returns to Authorize/Disallow.

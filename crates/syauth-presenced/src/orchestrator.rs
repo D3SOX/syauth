@@ -84,10 +84,6 @@ pub const RELOAD_TRIGGER_RPC: &str = "rpc";
 /// Audit-line `trigger=` value emitted on an inotify-driven reload.
 pub const RELOAD_TRIGGER_INOTIFY: &str = "inotify";
 
-/// Audit-line tag for [`ReloadTrigger::Pair`]: the daemon-owned pair
-/// flow completed a new bond and asked the orchestrator to pick it up.
-pub const RELOAD_TRIGGER_PAIR: &str = "pair";
-
 /// Audit-line `trigger=` value emitted on the test-shim reload path.
 /// `pub(crate)` because no production caller should ever emit this
 /// trigger; the constant is only used by the in-process test seam
@@ -356,10 +352,6 @@ pub enum ReloadTrigger {
     /// `notify::recommended_watcher` fired on `bonds.toml` (SPEC §8
     /// Risks row, belt-and-suspenders for SIGHUP delivery loss).
     Inotify,
-    /// Daemon-owned pair flow committed a new bond and asked the
-    /// orchestrator to reload. Distinct trigger so the audit line
-    /// distinguishes "new pair" from "operator-driven reload".
-    Pair,
     /// In-process test seam (`Orchestrator::signal_reload_for_test`).
     /// Production callers cannot construct this variant by name —
     /// the constructor is `pub(crate)`.
@@ -374,7 +366,6 @@ impl ReloadTrigger {
             ReloadTrigger::Sighup => RELOAD_TRIGGER_SIGHUP,
             ReloadTrigger::Rpc => RELOAD_TRIGGER_RPC,
             ReloadTrigger::Inotify => RELOAD_TRIGGER_INOTIFY,
-            ReloadTrigger::Pair => RELOAD_TRIGGER_PAIR,
             ReloadTrigger::Test => RELOAD_TRIGGER_TEST,
         }
     }
@@ -1178,25 +1169,14 @@ fn parse_signature(bytes: &[u8]) -> Option<Signature> {
 }
 
 /// Build the union of `session_uuid_for(bond_key, minute)` across
-/// every peer in `snapshot`, plus the always-present pair-mode UUID
-/// derived from the zero bond key. The pair UUID keeps the daemon
-/// discoverable to a phone trying to add a new bond even when no
-/// existing peer is bonded; for an already-bonded host it sits
-/// alongside the per-peer rotating UUIDs.
+/// every peer in `snapshot`. The daemon advertises no pair-mode UUID;
+/// `syauth pair` advertises that one while its pairing window is open.
 fn build_uuid_union(snapshot: &[(String, [u8; BOND_KEY_BYTES])], minute: i64) -> HashSet<Uuid> {
-    let mut set: HashSet<Uuid> = snapshot
+    snapshot
         .iter()
         .map(|(_id, key)| Uuid::from_bytes(session_uuid_for(key, minute)))
-        .collect();
-    let pair_uuid = Uuid::from_bytes(session_uuid_for(&PAIR_MODE_ZERO_BOND_KEY, minute));
-    set.insert(pair_uuid);
-    set
+        .collect()
 }
-
-/// Zero bond key used to derive the pair-mode advertise UUID. The
-/// phone's CDM pair-mode scan filter derives the same UUID from
-/// the same zero key + minute; matching is the rendezvous.
-const PAIR_MODE_ZERO_BOND_KEY: [u8; BOND_KEY_BYTES] = [0u8; BOND_KEY_BYTES];
 
 /// Look up the bond_key for `peer_id` inside a captured snapshot.
 /// Returns a reference to a zero-array when the peer is missing
