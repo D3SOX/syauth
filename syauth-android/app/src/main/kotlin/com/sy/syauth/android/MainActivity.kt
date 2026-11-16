@@ -336,20 +336,19 @@ class MainActivity : FragmentActivity() {
      * publishes the seams.
      */
     /**
-     * On cold start, iterate every CDM association this package owns
-     * and start `CompanionDeviceManager.startObservingDevicePresence`
-     * for the ones matching the bonded peer. The OS treats the
-     * call as idempotent; we err on the side of starting all matching
-     * associations (the device has many stale rows from pair retries
-     * — each one ends with the SAME MAC, so observing any of them
-     * lets the OS bind `SyauthCompanionService` on proximity).
+     * On cold start, keep the newest CDM association matching the
+     * bonded peer, remove older ones left behind by earlier pair
+     * attempts, and start `CompanionDeviceManager.startObservingDevicePresence`
+     * for it. The MAC-string observe fallback attaches to the first
+     * association with that address, so stale rows would otherwise
+     * receive the presence events.
      *
      * Without this, `mNotifyOnDeviceNearby` stays `false` on every
      * association and the unlock service never gets bound, which
      * gives `pam_syauth` a `response-timeout` on every unlock.
      */
     private fun startObservingForBondedAssociations(record: BondRecord) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val manager = getSystemService(android.companion.CompanionDeviceManager::class.java) ?: return
         val scanner = cdmPairScanner ?: return
         val targetMac = record.peerId.uppercase()
@@ -358,13 +357,13 @@ class MainActivity : FragmentActivity() {
                 info.deviceMacAddress?.toString()?.uppercase() == targetMac
             }
         }.getOrDefault(emptyList())
-        if (matched.isEmpty()) {
+        val newest = matched.maxByOrNull { it.id }
+        if (newest == null) {
             Log.w(PERMISSION_LOG_TAG, "no CDM associations match bonded mac=$targetMac")
             return
         }
-        for (info in matched) {
-            scanner.startObservingDevicePresence(info.id)
-        }
+        scanner.keepOnlyAssociation(newest.id)
+        scanner.startObservingDevicePresence(newest.id)
     }
 
     private fun installCompanionSeams(record: BondRecord) {

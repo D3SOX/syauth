@@ -166,6 +166,9 @@ public class AndroidCdmPairCompanionScanner(
                     CDM_PAIR_SCANNER_LOG_TAG,
                     "CDM association created id=${associationInfo.id}",
                 )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    keepOnlyAssociation(associationInfo.id)
+                }
                 startObservingDevicePresence(associationInfo.id)
             }
 
@@ -178,6 +181,30 @@ public class AndroidCdmPairCompanionScanner(
         val request = IntentSenderRequest.Builder(intentSender).build()
         runCatching { launcher.launch(request) }.onFailure { t ->
             failPending(t.message ?: t::class.java.simpleName)
+        }
+    }
+
+    /**
+     * Remove this app's other CDM associations for the device behind
+     * [associationId]. Every pair attempt creates a new association,
+     * and the MAC-string presence fallback in
+     * [startObservingDevicePresence] attaches to the first association
+     * with that address, which is then not the one in use.
+     */
+    public fun keepOnlyAssociation(associationId: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val manager = activity.getSystemService(CompanionDeviceManager::class.java) ?: return
+        val associations = runCatching { manager.myAssociations }.getOrDefault(emptyList())
+        val mac = associations.firstOrNull { it.id == associationId }?.deviceMacAddress?.toString() ?: return
+        val stale = staleAssociationIds(
+            associations.map { it.id to it.deviceMacAddress?.toString() },
+            mac = mac,
+            keepId = associationId,
+        )
+        for (id in stale) {
+            runCatching { manager.disassociate(id) }
+                .onSuccess { Log.i(CDM_PAIR_SCANNER_LOG_TAG, "removed stale association id=$id (kept $associationId)") }
+                .onFailure { Log.w(CDM_PAIR_SCANNER_LOG_TAG, "disassociate id=$id failed", it) }
         }
     }
 
@@ -374,6 +401,18 @@ public class AndroidCdmPairCompanionScanner(
         onFailed(reason)
     }
 }
+
+/**
+ * Ids in [associations] (`id to MAC`) that point at [mac] but are not
+ * [keepId]. Pure so the selection is unit-testable without CDM.
+ */
+internal fun staleAssociationIds(
+    associations: List<Pair<Int, String?>>,
+    mac: String,
+    keepId: Int,
+): List<Int> = associations
+    .filter { (id, address) -> id != keepId && address.equals(mac, ignoreCase = true) }
+    .map { it.first }
 
 /**
  * Direct executor that runs every task inline on the caller's thread.
