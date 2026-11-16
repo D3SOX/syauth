@@ -146,9 +146,9 @@ Build the package and install it, or download the Arch package from the
 git clone https://github.com/D3SOX/syauth.git
 cd syauth
 cargo build --release --locked -p syauth-cli -p syauth-pam -p syauth-presenced
-scripts/build-linux-packages.sh --version 0.1.1 --arch x86_64 \
+scripts/build-linux-packages.sh --version 0.3.0 --arch x86_64 \
   --binaries target/release --output target/packages
-sudo pacman -U target/packages/syauth-0.1.1-1-x86_64.pkg.tar.zst
+sudo pacman -U target/packages/syauth-0.3.0-1-x86_64.pkg.tar.zst
 ```
 
 Run the following from a terminal in your local KDE session. Substitute your

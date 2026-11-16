@@ -23,7 +23,7 @@ Approve Linux authentication on your Android phone. syauth carries a fresh chall
 
 This site documents the [D3SOX fork](fork.md), which adds an Arch Linux/KDE desktop installer, empty-password KDE unlock, a combined sudo password/phone prompt, live lockscreen status, and connection recovery fixes.
 
-Install the desktop with `curl -fsSL https://d3sox.me/syauth/install.sh | sh`, then follow [installation and setup](how-to/install.md). The [published v0.1.1 assets](https://github.com/D3SOX/syauth/releases/tag/v0.1.1) include DEB/RPM/Arch packages for both CPU architectures and the [signed Android companion](https://github.com/D3SOX/syauth/releases/download/v0.1.1/syauth-0.1.1-android.apk); GitHub lists a SHA-256 digest for each.
+Install the desktop with `curl -fsSL https://d3sox.me/syauth/install.sh | sh`, then follow [installation and setup](how-to/install.md). The [published v0.3.0 assets](https://github.com/D3SOX/syauth/releases/tag/v0.3.0) include DEB/RPM/Arch packages for both CPU architectures and the [signed Android companion](https://github.com/D3SOX/syauth/releases/download/v0.3.0/syauth-0.3.0-android.apk); GitHub lists a SHA-256 digest for each.
 
 ## Follow one unlock
 

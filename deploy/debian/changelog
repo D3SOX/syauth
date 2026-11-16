@@ -4,6 +4,13 @@ syauth (0.3.0-1) unstable; urgency=medium
   * Derive and validate the selected desktop account's PAM socket.
   * Preserve daemon ownership of newly created PAM audit logs.
   * Exercise installed PAM and configuration rollback in a NixOS VM in CI.
+  * Leave pairing to `syauth pair`; the daemon no longer registers a
+    Bluetooth agent or accepts phones on its own.
+  * Report a phone whose signing key changed in status, doctor, and the
+    KDE lockscreen.
+  * Use BlueZ's default adapter in pair, status, and doctor.
+  * Android: show pairing failures, the Location requirement, a lost
+    Keystore key, and battery optimization.
 
  -- syauth contributors <maintainers@example.invalid>  Sun, 08 Nov 2026 00:00:00 +0000
 
