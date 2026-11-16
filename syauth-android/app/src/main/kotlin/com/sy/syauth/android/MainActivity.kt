@@ -106,6 +106,7 @@ import com.sy.syauth.android.history.ChallengeHistoryRecord
 import com.sy.syauth.android.history.HISTORY_DISPLAY_LIMIT
 import com.sy.syauth.android.bond.BondRecord
 import com.sy.syauth.android.bond.BOND_RECORD_FILE_NAME
+import com.sy.syauth.android.bond.isSigningKeyUsable
 import com.sy.syauth.android.bond.BondStore
 import com.sy.syauth.android.bond.DiskBondPersister
 import com.sy.syauth.android.bond.loadPersistedBond
@@ -137,6 +138,15 @@ const val HOME_REVOKE_BUTTON_TAG: String = "syauth.home.revoke"
 
 /** Test tag attached to the "?" diagnostic button on the home route. */
 const val HOME_DIAGNOSTIC_BUTTON_TAG: String = "syauth.home.diagnostic"
+
+/** Test tag on the home card's "signing key lost, re-pair" warning. */
+const val HOME_KEY_LOST_TAG: String = "syauth.home.keyLost"
+
+/** Shown on the home card when the bond's Keystore key is missing or invalidated. */
+internal const val SIGNING_KEY_LOST_TEXT: String =
+    "This phone's signing key for this pairing is gone, for example after restoring app data " +
+        "from a backup or changing biometrics. Unlocks fail until you pair again: tap Re-pair, " +
+        "then revoke the old bond on the computer with syauth revoke."
 
 // Bond store filename comes from `BondStore.BOND_RECORD_FILE_NAME` so this
 // route never duplicates the literal.
@@ -638,9 +648,15 @@ private fun SyauthApp(
                     }.getOrDefault(0L)
                 }
             }
+            // A restored backup or a biometric re-enrollment can leave the
+            // bond file without its Keystore key; every unlock then fails.
+            val signingKeyLost = remember(bondRecord) {
+                bondRecord != null && !isSigningKeyUsable(bondRecord.keystoreAlias)
+            }
             HomeRoute(
                 bondRecord = bondRecord,
                 pairedAtMillis = pairedAtMillis,
+                signingKeyLost = signingKeyLost,
                 onPairTapped = { navController.navigate(NavRoutes.PAIR) },
                 onRevokeTapped = onRevoke,
                 onDiagnosticTapped = { navController.navigate(NavRoutes.DIAGNOSTIC) },
@@ -863,6 +879,7 @@ private val BLUETOOTH_RUNTIME_PERMISSIONS: Array<String> = arrayOf(
 private fun HomeRoute(
     bondRecord: BondRecord?,
     pairedAtMillis: Long,
+    signingKeyLost: Boolean,
     onPairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
     onDiagnosticTapped: () -> Unit,
@@ -893,6 +910,7 @@ private fun HomeRoute(
                 PairedHomeBody(
                     bondRecord = bondRecord,
                     pairedAtMillis = pairedAtMillis,
+                    signingKeyLost = signingKeyLost,
                     onRepairTapped = onPairTapped,
                     onRevokeTapped = { revokeDialogState.value = true },
                 )
@@ -943,6 +961,7 @@ private fun UnpairedHomeBody(onPairTapped: () -> Unit) {
 private fun PairedHomeBody(
     bondRecord: BondRecord,
     pairedAtMillis: Long,
+    signingKeyLost: Boolean,
     onRepairTapped: () -> Unit,
     onRevokeTapped: () -> Unit,
 ) {
@@ -952,6 +971,15 @@ private fun PairedHomeBody(
     Text(text = "peer_id: ${truncatedPeerId(bondRecord.peerId)}")
     if (pairedAtMillis > 0L) {
         Text(text = "paired:  ${formatPairedAt(pairedAtMillis)}")
+    }
+    if (signingKeyLost) {
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = SIGNING_KEY_LOST_TEXT,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.semantics { testTag = HOME_KEY_LOST_TAG },
+        )
     }
     Spacer(modifier = Modifier.height(24.dp))
     androidx.compose.foundation.layout.Row(
